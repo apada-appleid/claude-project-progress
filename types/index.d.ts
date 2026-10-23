@@ -27,6 +27,9 @@ export type Snapshot = {
   now: string
   steps: Steps | null
   contextFreePct: number | null
+  /** The tokens the context holds, and the window they fill; null until the first response. */
+  contextTokens: number | null
+  contextWindow: number | null
   rate5hPct: number | null
   status: Status
   /** Background shells and subagents still running; a session with any is still working. */

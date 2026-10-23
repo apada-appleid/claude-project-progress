@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
 import { digest, fingerprint, guessStatus, parseEstimate } from '../hooks/estimate'
-import { fit, partsFor } from '../hooks/line'
+import { BLUE, ctxColor, fit, progressParts, RED, usageParts, YELLOW } from '../hooks/line'
 import { planItems, planSteps } from '../hooks/plan'
 import { parseIdleMs } from '../hooks/presence'
 import { cutName, pie, prefixFor, STATUS_EMOJI, stripPrefix } from '../hooks/title'
@@ -25,6 +25,8 @@ const snap = (over: Partial<Snapshot>): Snapshot => ({
   now: 'running tests',
   steps: { done: 3, total: 5 },
   contextFreePct: 41,
+  contextTokens: null,
+  contextWindow: null,
   rate5hPct: 34,
   status: 'working',
   background: 0,
@@ -137,11 +139,11 @@ test('the pie fills in quarter steps, and a long name is cut at a word', () => {
 })
 
 test('the band names the full title the sidebar shortens, and the task in progress', () => {
-  const line = fit(partsFor(snap({ project: 'Fix the clipping on the share card', shortName: 'Share card clipping' }), 0), 500)
+  const line = fit(progressParts(snap({ project: 'Fix the clipping on the share card', shortName: 'Share card clipping' }), 0), 500)
 
   expect(line.includes('Fix the clipping on the share card')).toBe(true)
   expect(line.includes('now: running tests')).toBe(true)
-  expect(fit(partsFor(snap({ status: 'done' }), 0), 500).includes('now:')).toBe(false)
+  expect(fit(progressParts(snap({ status: 'done' }), 0), 500).includes('now:')).toBe(false)
 })
 
 test('the machine idle time is read from ioreg', () => {
@@ -149,18 +151,26 @@ test('the machine idle time is read from ioreg', () => {
   expect(parseIdleMs('nothing')).toBe(null)
 })
 
-test('a narrow line drops the estimator cost first and keeps the percent and waiting flag', () => {
-  const parts = partsFor(snap({ status: 'question' }), 90 * 60_000)
-  const wide = fit(parts, 500)
-  const narrow = fit(parts, 40)
+test('each row drops its least important parts first', () => {
+  const progress = progressParts(snap({ status: 'question' }), 90 * 60_000)
+  const narrow = fit(progress, 40)
 
-  expect(wide.includes('estimator today 12k tokens')).toBe(true)
-  expect(wide.includes('⏱ 1h 30m')).toBe(true)
-  expect(narrow.includes('estimator today')).toBe(false)
+  expect(fit(progress, 500).includes('⏱ 1h 30m')).toBe(true)
+  expect(narrow.includes('⏱')).toBe(false)
   expect(narrow.includes('62%')).toBe(true)
   expect(narrow.includes('waiting for your answer')).toBe(true)
-  expect(fit(partsFor(snap({ isAway: true }), 0), 500).includes('ctx 59%')).toBe(true)
-  expect(fit(partsFor(snap({ background: 2 }), 0), 500).includes('⟳ 2 in background')).toBe(true)
+  expect(fit(progressParts(snap({ background: 2 }), 0), 500).includes('⟳ 2 in background')).toBe(true)
+  expect(fit(progressParts(snap({ isAway: true }), 0), 500).includes('paused while you are away')).toBe(true)
+
+  const usage = usageParts(snap({ contextTokens: 118_000, contextWindow: 200_000 }))
+  expect(fit(usage, 500)).toBe('ctx 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens')
+  expect(fit(usage, 20)).toBe('ctx 59%')
+})
+
+test('the context bar is blue, then yellow, then red as it fills', () => {
+  expect(ctxColor(snap({ contextFreePct: 41 }))).toBe(BLUE)
+  expect(ctxColor(snap({ contextFreePct: 25 }))).toBe(YELLOW)
+  expect(ctxColor(snap({ contextFreePct: 10 }))).toBe(RED)
 })
 
 // The world beneath the mod: a session whose transcript, idle time and title the test controls.
@@ -318,7 +328,7 @@ test('the band draws the bar and the line on the terminal and the desktop', asyn
   await clock.advance(2000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    for (const bodyColumns of [160, 60]) {
+    for (const bodyColumns of [160, 40]) {
       const ui = await $.ui.mount({
         plugin: 'project-progress',
         surface,
@@ -333,10 +343,11 @@ test('the band draws the bar and the line on the terminal and the desktop', asyn
           view: {},
         },
       })
-      const line = await ui.find({ type: 'Text', text: /40%/ })
+      const progress = await ui.find({ type: 'Text', text: /40%/ })
+      const usage = await ui.find({ type: 'Text', text: /ctx 25%/ })
 
-      expect(line?.text.includes('left: contact form')).toBe(bodyColumns === 160)
-      expect(line?.text.includes('ctx 25%')).toBe(true)
+      expect(progress?.text.includes('left: contact form')).toBe(bodyColumns === 160)
+      expect(usage?.text.includes('50k of 200k')).toBe(bodyColumns === 160)
       expect(await ui.find({ key: 'open' })).toBeDefined()
       await ui.unmount()
     }
@@ -374,6 +385,7 @@ test('the projects pane lists every session file with its bar, on every surface'
 
     expect((await ui.find({ type: 'Text', text: /Shop/ }))?.text).toBe('Shop')
     expect((await ui.find({ type: 'Text', text: /62%/ }))?.text.includes('now: running tests')).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /ctx 59%/ })).toBeDefined()
     await ui.unmount()
   }
 })

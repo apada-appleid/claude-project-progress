@@ -3,8 +3,14 @@ import { STATUS_EMOJI } from './title'
 
 export const GREEN = '#22c55e'
 export const BLUE = '#3b82f6'
+export const YELLOW = '#eab308'
+export const RED = '#ef4444'
 export const BAR_PX = 110
 export const BAR_CELLS = 12
+
+// Where the context bar turns from blue to yellow, and from yellow to red.
+export const CTX_WARN = 70
+export const CTX_FULL = 85
 
 const STATUS_TEXT: Partial<Record<Status, string>> = {
   question: 'waiting for your answer',
@@ -27,30 +33,41 @@ const tokens = (n: number): string => (n < 1000 ? String(n) : `${Math.round(n / 
 // How full the context window is.
 export const ctxUsed = (s: Snapshot): number | null => (s.contextFreePct === null ? null : 100 - s.contextFreePct)
 
-const ctxText = (s: Snapshot): string => `ctx ${ctxUsed(s) ?? '?'}%`
+// Blue while there is room, yellow as it fills, red near full.
+export const ctxColor = (s: Snapshot): string => {
+  const used = ctxUsed(s) ?? 0
 
-export const partsFor = (s: Snapshot, now: number): Part[] => {
+  return used >= CTX_FULL ? RED : used >= CTX_WARN ? YELLOW : BLUE
+}
+
+// The first row: how far the work is.
+export const progressParts = (s: Snapshot, now: number): Part[] => {
   const parts: Part[] = []
   const said = STATUS_TEXT[s.status]
   if (said !== undefined) parts.push({ text: `${STATUS_EMOJI[s.status] ?? ''} ${said}`, drop: 0 })
   // The sidebar shows a short name; here is the full one.
   if (s.shortName !== null) parts.push({ text: s.project, drop: 2 })
 
-  if (s.isAway && s.status === 'working') {
-    parts.push({ text: ctxText(s), drop: 0 })
-    parts.push({ text: '⏸ estimates paused while you are away', drop: 3 })
-    if (s.percent !== null) parts.push({ text: `last estimate ${s.percent}%`, drop: 2 })
-  } else {
-    parts.push({ text: s.percent === null ? 'estimating…' : `${s.percent}%`, drop: 0 })
-    if (s.status === 'working' && s.now !== '') parts.push({ text: `now: ${s.now}`, drop: 1 })
-    if (s.steps !== null) parts.push({ text: `${s.steps.done}/${s.steps.total} steps`, drop: 1 })
-    if (s.left !== '') parts.push({ text: `left: ${s.left}`, drop: 4 })
-    if (s.contextFreePct !== null) parts.push({ text: ctxText(s), drop: 1 })
-  }
+  parts.push({ text: s.percent === null ? 'estimating…' : `${s.percent}%`, drop: 0 })
+  if (s.isAway && s.status === 'working') parts.push({ text: '⏸ estimates paused while you are away', drop: 3 })
+  else if (s.status === 'working' && s.now !== '') parts.push({ text: `now: ${s.now}`, drop: 1 })
   if (s.background > 0) parts.push({ text: `⟳ ${s.background} in background`, drop: 1 })
-  if (s.rate5hPct !== null) parts.push({ text: `5h limit ${s.rate5hPct}%`, drop: 5 })
-  parts.push({ text: `⏱ ${elapsed(now - s.startedAt)}`, drop: 6 })
-  parts.push({ text: `estimator today ${tokens(s.estimator.tokens)} tokens`, drop: 7 })
+  if (s.steps !== null) parts.push({ text: `${s.steps.done}/${s.steps.total} steps`, drop: 1 })
+  if (s.left !== '') parts.push({ text: `left: ${s.left}`, drop: 4 })
+  parts.push({ text: `⏱ ${elapsed(now - s.startedAt)}`, drop: 5 })
+
+  return parts
+}
+
+// The second row: how much of the context, the plan and the estimator is used.
+export const usageParts = (s: Snapshot): Part[] => {
+  const used = ctxUsed(s)
+  const parts: Part[] = [{ text: `ctx ${used ?? '?'}%`, drop: 0 }]
+  if (s.contextTokens !== null && s.contextWindow !== null) {
+    parts.push({ text: `${tokens(s.contextTokens)} of ${tokens(s.contextWindow)}`, drop: 3 })
+  }
+  if (s.rate5hPct !== null) parts.push({ text: `5h limit ${s.rate5hPct}%`, drop: 2 })
+  parts.push({ text: `estimator today ${tokens(s.estimator.tokens)} tokens`, drop: 4 })
 
   return parts
 }
@@ -68,13 +85,6 @@ export const fit = (parts: readonly Part[], columns: number): string => {
 
   return kept.map(part => part.text).join(' · ')
 }
-
-// Green for the estimate while you are here, blue for the context left while you are away.
-const isPaused = (s: Snapshot): boolean => s.isAway && s.status === 'working'
-
-export const barPct = (s: Snapshot): number => (isPaused(s) ? ctxUsed(s) : s.percent) ?? 0
-
-export const barColor = (s: Snapshot): string => (isPaused(s) ? BLUE : GREEN)
 
 export const svgBar = (pct: number, color: string): string => {
   const filled = Math.round((BAR_PX * Math.max(0, Math.min(100, pct))) / 100)

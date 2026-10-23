@@ -23,15 +23,18 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 - A name longer than 22 characters is shown shortened: the same estimate gives a version of 3 words at most ("Fix the clipping on the share card" becomes "Share card clipping"). The full name stays in the line above the prompt, and `/progress title off` puts it back in the title. Rename a session and the mod takes the new name.
 - The title changes only when what it shows changes (the percent in 5% steps), not every minute.
 
-**Above the prompt**: one line with a colored bar and the details.
+**Above the prompt**: two rows, the work's progress and how full the context is.
 
 ```
-████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · ctx 59% · 5h limit 34% · ⏱ 1h 20m · estimator today 12k tokens
+████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · ⏱ 1h 20m
+███████░░░░░ ctx 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens
 ```
 
-The full name shows when the sidebar shortens it, and `now:` is the task list's step in progress, or the model's words for what Claude is doing. Once the turn ends, the line starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...). When the line is too narrow, the least important parts drop first: the estimator's cost, the time, the 5-hour limit, then what is left.
+- The first bar is green. The full name shows when the sidebar shortens it, and `now:` is the task list's step in progress, or the model's words for what Claude is doing. Once the turn ends, the row starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...).
+- The second bar is the context window: blue while there is room, yellow from 70% full, red from 85%.
+- When a row is too narrow, its least important parts drop first.
 
-**The projects pane**: `/progress` (or the **Projects** button on the line) opens a pane that lists every session running the mod, each with its own bar and details.
+**The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows.
 
 ## How it keeps token use low
 

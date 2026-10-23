@@ -5,7 +5,7 @@ import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
 import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { runningShells } from './background'
-import { BAR_CELLS, BAR_PX, barColor, barPct, cells, fit, partsFor, svgBar } from './line'
+import { BAR_CELLS, BAR_PX, cells, ctxColor, ctxUsed, fit, GREEN, progressParts, svgBar, usageParts } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
 import { cutName, prefixFor, SHORT_AT, stripPrefix } from './title'
@@ -240,6 +240,8 @@ export const register: Register = (on, options) => {
           now: doing,
           steps: planSteps(items),
           contextFreePct: usage.context.percent === undefined ? null : 100 - usage.context.percent,
+          contextTokens: usage.context.tokens ?? null,
+          contextWindow: usage.context.window,
           rate5hPct: rate === undefined ? null : Math.round(rate.percentUsed),
           status,
           background,
@@ -376,24 +378,41 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // Two rows: the work's progress in green, and how full the context is in blue, yellow, then red.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, snapshot)
     if (e.props.hasSurvey || s === null) return next(e)
 
-    const line = fit(partsFor(s, await $.clock.now()), e.props.bodyColumns - 28)
+    const progress = fit(progressParts(s, await $.clock.now()), e.props.bodyColumns - 28)
+    const usage = fit(usageParts(s), e.props.bodyColumns - 16)
+    const used = ctxUsed(s) ?? 0
 
     if (e.surface === 'terminal') {
       const { Box, Button, Text } = $.ui.resolve(e)
-      const [full, empty] = cells(barPct(s))
+      const bar = (pct: number, color: string) => {
+        const [full, empty] = cells(pct)
 
-      return (
-        <Box flexDirection="row" gap={1}>
+        return (
           <Box>
-            <Text color={barColor(s)}>{full}</Text>
+            <Text color={color}>{full}</Text>
             <Text dimColor>{empty}</Text>
           </Box>
-          <Text wrap="truncate-end">{line}</Text>
-          <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+        )
+      }
+
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            {bar(s.percent ?? 0, GREEN)}
+            <Text wrap="truncate-end">{progress}</Text>
+            <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+          </Box>
+          <Box flexDirection="row" gap={1}>
+            {bar(used, ctxColor(s))}
+            <Text dimColor wrap="truncate-end">
+              {usage}
+            </Text>
+          </Box>
         </Box>
       )
     }
@@ -401,12 +420,18 @@ export const register: Register = (on, options) => {
     const { Box, Button, Svg, Text } = $.ui.resolve(e)
 
     return (
-      <Box flexDirection="row" gap={1} alignItems="center">
-        <Svg source={svgBar(barPct(s), barColor(s))} alt={`${barPct(s)}%`} width={BAR_PX} height={8} />
-        <Text wrap="truncate-end">
-          {line}
-        </Text>
-        <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+      <Box flexDirection="column">
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Svg source={svgBar(s.percent ?? 0, GREEN)} alt={`${s.percent ?? 0}% done`} width={BAR_PX} height={8} />
+          <Text wrap="truncate-end">{progress}</Text>
+          <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+        </Box>
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Svg source={svgBar(used, ctxColor(s))} alt={`context ${used}% full`} width={BAR_PX} height={8} />
+          <Text dimColor wrap="truncate-end">
+            {usage}
+          </Text>
+        </Box>
       </Box>
     )
   })
@@ -428,7 +453,18 @@ export const register: Register = (on, options) => {
             $.fs
               .read(`${dir}/${f.name}`)
               // A session still on an earlier version writes fewer fields.
-              .then(text => ({ shortName: null, now: '', status: 'idle', background: 0, ...(JSON.parse(text) as object) }) as Snapshot)
+              .then(
+                text =>
+                  ({
+                    shortName: null,
+                    now: '',
+                    status: 'idle',
+                    background: 0,
+                    contextTokens: null,
+                    contextWindow: null,
+                    ...(JSON.parse(text) as object),
+                  }) as Snapshot,
+              )
               .catch(() => null),
           ),
         )
@@ -439,41 +475,52 @@ export const register: Register = (on, options) => {
     }
 
     const columns = e.props.bodyColumns - (e.surface === 'terminal' ? BAR_CELLS + 2 : 16)
-    const rowLine = (s: Snapshot) => fit(partsFor(s, now), columns)
     const isStale = (s: Snapshot) => now - s.updatedAt > STALE_MS
     const name = (s: Snapshot) => `${s.project}${isStale(s) ? ' — last estimate' : ''}`
 
     if (e.surface === 'terminal') {
       const { Box, Text } = $.ui.resolve(e)
+      const row = (pct: number, color: string, text: string) => {
+        const [full, empty] = cells(pct)
+
+        return (
+          <Box flexDirection="row" gap={1}>
+            <Box>
+              <Text color={color}>{full}</Text>
+              <Text dimColor>{empty}</Text>
+            </Box>
+            <Text dimColor wrap="truncate-end">
+              {text}
+            </Text>
+          </Box>
+        )
+      }
 
       return (
         <Box flexDirection="column" gap={1}>
           {list.length === 0 && <Text dimColor>No projects yet.</Text>}
-          {list.map(s => {
-            const [full, empty] = cells(barPct(s))
-
-            return (
-              <Box key={s.sessionId} flexDirection="column">
-                <Text bold dimColor={isStale(s)} wrap="truncate-end">
-                  {name(s)}
-                </Text>
-                <Box flexDirection="row" gap={1}>
-                  <Box>
-                    <Text color={barColor(s)}>{full}</Text>
-                    <Text dimColor>{empty}</Text>
-                  </Box>
-                  <Text dimColor wrap="truncate-end">
-                    {rowLine(s)}
-                  </Text>
-                </Box>
-              </Box>
-            )
-          })}
+          {list.map(s => (
+            <Box key={s.sessionId} flexDirection="column">
+              <Text bold dimColor={isStale(s)} wrap="truncate-end">
+                {name(s)}
+              </Text>
+              {row(s.percent ?? 0, GREEN, fit(progressParts(s, now), columns))}
+              {row(ctxUsed(s) ?? 0, ctxColor(s), fit(usageParts(s), columns))}
+            </Box>
+          ))}
         </Box>
       )
     }
 
     const { Box, Svg, Text } = $.ui.resolve(e)
+    const row = (pct: number, color: string, alt: string, text: string) => (
+      <Box flexDirection="row" gap={1} alignItems="center">
+        <Svg source={svgBar(pct, color)} alt={alt} width={BAR_PX} height={8} />
+        <Text dimColor wrap="truncate-end">
+          {text}
+        </Text>
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -483,12 +530,8 @@ export const register: Register = (on, options) => {
             <Text bold dimColor={isStale(s)} wrap="truncate-end">
               {name(s)}
             </Text>
-            <Box flexDirection="row" gap={1} alignItems="center">
-              <Svg source={svgBar(barPct(s), barColor(s))} alt={`${barPct(s)}%`} width={BAR_PX} height={8} />
-              <Text dimColor wrap="truncate-end">
-                {rowLine(s)}
-              </Text>
-            </Box>
+            {row(s.percent ?? 0, GREEN, `${s.percent ?? 0}% done`, fit(progressParts(s, now), columns))}
+            {row(ctxUsed(s) ?? 0, ctxColor(s), `context ${ctxUsed(s) ?? 0}% full`, fit(usageParts(s), columns))}
           </Box>
         ))}
       </Box>
