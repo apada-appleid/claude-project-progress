@@ -1,16 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Snapshot, Status } from '../types'
+import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
 import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { BAR_CELLS, BAR_PX, barColor, barPct, cells, fit, partsFor, svgBar } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
-import { prefixFor, stripPrefix } from './title'
+import { cutName, prefixFor, SHORT_AT, stripPrefix } from './title'
 
 const snapshot = atom({ plugin: 'project-progress', key: 'snapshot' } as const, null)
-const baseTitle = atom({ plugin: 'project-progress', key: 'baseTitle' } as const, null)
+const titleRecord = atom({ plugin: 'project-progress', key: 'titleRecord' } as const, null)
 const tick = atom({ plugin: 'project-progress', key: 'tick' } as const, 0)
 
 const PANE = 'projects'
@@ -27,13 +27,17 @@ const RANK: Readonly<Record<Mode, number>> = { quiet: 0, tick: 1, force: 2, fina
 // What session.start builds over its own $, for the timer and the other hooks to call.
 type Session = {
   refresh: (mode: Mode) => Promise<void>
-  syncTitle: (s: Snapshot) => Promise<void>
   clearTitle: () => Promise<void>
 }
+
+// The session's title as read back: the app's id and title, the mod's record, and the full name.
+type TitleRead = { id: string; title: string; record: TitleRecord | null; base: string }
 
 const textOf = (blocks: readonly { text?: string }[]): string => blocks.map(block => block.text ?? '').join('')
 
 const basename = (path: string): string => path.split('/').filter(Boolean).pop() ?? path
+
+const fileName = (id: string): string => id.replace(/[^\w-]/g, '_')
 
 export const register: Register = (on, options) => {
   const awayMs = Number(options.idleMinutes ?? 3) * 60_000
@@ -49,23 +53,22 @@ export const register: Register = (on, options) => {
   let isTitleOn = options.renameTitles !== false
 
   on('session.start', async ($, e, next) => {
-    const sessionId = (await $.session.id()).replace(/[^\w-]/g, '_')
+    const sessionId = fileName(await $.session.id())
     const home = await $.env.get('HOME')
     sharedDir = home === undefined ? '' : `${home}/.claude/project-progress`
-
     status = (await read($, snapshot))?.status ?? 'idle'
 
     let lastFingerprint = ''
-    // undefined until the first sync, which so strips a prefix a previous run left behind.
-    let lastPrefix: string | null | undefined
     let isBusy = false
     let again: Mode | null = null
 
-    const currentTitle = async (): Promise<string> => {
+    // The session as the desktop app knows it: its own id, which outlives a restart, and its title.
+    const appSession = async (): Promise<{ id: string; title: string }> => {
       const info = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
       if (info.isError) throw new Error(textOf(info.content))
+      const value = JSON.parse(textOf(info.content)) as { sessionId?: unknown; title?: unknown }
 
-      return String((JSON.parse(textOf(info.content)) as { title?: unknown }).title ?? '')
+      return { id: String(value.sessionId ?? sessionId), title: String(value.title ?? '') }
     }
 
     const setTitle = async (title: string): Promise<void> => {
@@ -73,32 +76,40 @@ export const register: Register = (on, options) => {
       if (set.isError) throw new Error(textOf(set.content))
     }
 
-    // Renames only when the prefix itself changes, so the sidebar is not rewritten every minute.
-    const syncTitle = async (s: Snapshot): Promise<void> => {
-      if (!isTitleOn) return
-      const prefix = prefixFor(s)
-      if (prefix === lastPrefix) return
+    const recordFile = (id: string) => `${sharedDir}/titles/${fileName(id)}.json`
+
+    // What the mod last set: held for this run, and on disk for after a restart.
+    const loadRecord = async (id: string): Promise<TitleRecord | null> => {
+      const held = await read($, titleRecord)
+      if (held !== null || sharedDir === '') return held
 
       try {
-        const current = await currentTitle()
-        const base = stripPrefix(current)
-        if (base === '') return
-        await update($, baseTitle, () => base)
-        const title = prefix === null ? base : prefix + base
-        if (title !== current) await setTitle(title)
-        lastPrefix = prefix
+        return JSON.parse(await $.fs.read(recordFile(id))) as TitleRecord
       } catch {
-        // Outside the desktop app there is no session title to change; the band and the pane still work.
-        isTitleOn = false
+        return null
       }
     }
 
+    const saveRecord = async (id: string, record: TitleRecord): Promise<void> => {
+      await update($, titleRecord, () => record)
+      if (sharedDir !== '') await $.fs.write(recordFile(id), JSON.stringify(record)).catch(() => undefined)
+    }
+
+    // The full name: the one the mod kept while the title is still the one it set, else the title as
+    // you or the app renamed it, less any prefix.
+    const readTitle = async (): Promise<TitleRead> => {
+      const app = await appSession()
+      const record = await loadRecord(app.id)
+      const base = record !== null && app.title === record.shown ? record.base : stripPrefix(app.title)
+
+      return { ...app, record, base }
+    }
+
     const clearTitle = async (): Promise<void> => {
-      lastPrefix = null
       try {
-        const current = await currentTitle()
-        const base = stripPrefix(current)
-        if (base !== '' && base !== current) await setTitle(base)
+        const read = await readTitle()
+        if (read.base !== '' && read.base !== read.title) await setTitle(read.base)
+        await saveRecord(read.id, { base: read.base, shown: read.base, short: read.record?.short ?? null })
       } catch {
         // Nothing to restore where the title cannot be read.
       }
@@ -142,6 +153,21 @@ export const register: Register = (on, options) => {
         let estimator = prev?.estimator.date === today ? prev.estimator : { date: today, tokens: 0 }
         let percent = prev?.percent ?? null
         let left = prev?.left ?? ''
+        let doing = prev?.now ?? ''
+
+        // Outside the desktop app there is no session title to change; the band and the pane still work.
+        let title: TitleRead | null = null
+        if (isTitleOn) {
+          try {
+            title = await readTitle()
+          } catch {
+            isTitleOn = false
+          }
+        }
+        const base = title === null || title.base === '' ? null : title.base
+        const isLong = base !== null && base.length > SHORT_AT
+        let short = base !== null && title?.record?.short?.for === base ? title.record.short : null
+        const isShortWanted = isLong && short === null
 
         const print = fingerprint(messages)
         const isChanged = mode === 'force' || mode === 'final' || (mode === 'tick' && print !== lastFingerprint)
@@ -151,8 +177,8 @@ export const register: Register = (on, options) => {
           const answer = await $.model.complete({
             model,
             system: [{ text: SYSTEM, cache: true }],
-            prompt: digest(messages, items, { percent, left }, mode === 'final'),
-            maxTokens: 150,
+            prompt: digest(messages, items, { percent, left }, mode === 'final', isShortWanted ? (base ?? undefined) : undefined),
+            maxTokens: 200,
             timeoutMs: 30_000,
           })
           const used = answer.usage
@@ -166,18 +192,27 @@ export const register: Register = (on, options) => {
               (used.cache_creation_input_tokens ?? 0),
           }
           estimate = answer.isAnswered ? parseEstimate(answer.text) : null
-          if (estimate !== null) ({ percent, left } = estimate)
+          if (estimate !== null) {
+            ;({ percent, left } = estimate)
+            if (estimate.now !== '') doing = estimate.now
+            if (isShortWanted && base !== null && estimate.short !== undefined) short = { for: base, text: estimate.short }
+          }
         }
         if (mode === 'final' && ofTurn === turn && status === 'working') {
           status = estimate?.status ?? guessStatus(messages)
         }
+        // The task list's step in progress says what Claude is doing better than any guess.
+        const step = items?.find(item => item.status === 'in_progress')?.content
+        if (step !== undefined && step !== '') doing = step.length > 60 ? `${step.slice(0, 59)}…` : step
 
         const rate = usage.rateLimits.find(limit => limit.kind === 'five_hour')
         const fresh: Snapshot = {
           sessionId,
-          project: '',
+          project: base ?? basename(await $.session.cwd()),
+          shortName: isLong && base !== null ? (short?.text ?? cutName(base)) : null,
           percent,
           left,
+          now: doing,
           steps: planSteps(items),
           contextFreePct: usage.context.percent === undefined ? null : 100 - usage.context.percent,
           rate5hPct: rate === undefined ? null : Math.round(rate.percentUsed),
@@ -189,9 +224,18 @@ export const register: Register = (on, options) => {
           estimator,
         }
 
-        // The title first: it is what names the project, from the first check on.
-        await syncTitle(fresh)
-        fresh.project = (await read($, baseTitle)) ?? basename(await $.session.cwd())
+        // The title changes only when what it shows changes, so the sidebar is not rewritten every minute.
+        if (title !== null && base !== null) {
+          const prefix = prefixFor(fresh)
+          const shown = prefix === null ? base : prefix + (fresh.shortName ?? base)
+          try {
+            if (shown !== title.title) await setTitle(shown)
+            const record: TitleRecord = { base, shown, short }
+            if (JSON.stringify(record) !== JSON.stringify(title.record)) await saveRecord(title.id, record)
+          } catch {
+            isTitleOn = false
+          }
+        }
 
         await update($, snapshot, () => fresh)
         await update($, tick, n => n + 1)
@@ -206,7 +250,7 @@ export const register: Register = (on, options) => {
       }
     }
 
-    session = { refresh, syncTitle, clearTitle }
+    session = { refresh, clearTitle }
 
     await $.command.register({
       name: 'progress',
@@ -283,8 +327,7 @@ export const register: Register = (on, options) => {
     }
     if (args === 'title on') {
       isTitleOn = true
-      const s = await read($, snapshot)
-      if (s !== null) await session?.syncTitle(s)
+      await session?.refresh('quiet')
       return {
         text: isTitleOn
           ? 'Bar back in the session title.'
@@ -352,7 +395,8 @@ export const register: Register = (on, options) => {
           files.map(f =>
             $.fs
               .read(`${dir}/${f.name}`)
-              .then(text => JSON.parse(text) as Snapshot)
+              // A session still on an earlier version writes fewer fields.
+              .then(text => ({ shortName: null, now: '', status: 'idle', ...(JSON.parse(text) as object) }) as Snapshot)
               .catch(() => null),
           ),
         )

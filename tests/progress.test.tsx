@@ -6,7 +6,7 @@ import { digest, fingerprint, guessStatus, parseEstimate } from '../hooks/estima
 import { fit, partsFor } from '../hooks/line'
 import { planItems, planSteps } from '../hooks/plan'
 import { parseIdleMs } from '../hooks/presence'
-import { prefixFor, STATUS_EMOJI, stripPrefix } from '../hooks/title'
+import { cutName, pie, prefixFor, STATUS_EMOJI, stripPrefix } from '../hooks/title'
 
 const prompt = (text: string): SessionMessage => ({ role: 'user', text, toolUses: [] })
 const reply = (text: string, toolUses: SessionMessage['toolUses'] = []): SessionMessage => ({
@@ -19,8 +19,10 @@ const use = (tool: string, input: Record<string, unknown>) => ({ tool_use_id: to
 const snap = (over: Partial<Snapshot>): Snapshot => ({
   sessionId: 's',
   project: 'Site',
+  shortName: null,
   percent: 62,
   left: 'test and deploy',
+  now: 'running tests',
   steps: { done: 3, total: 5 },
   contextFreePct: 41,
   rate5hPct: 34,
@@ -53,13 +55,19 @@ test('the task list is replayed the way the app keeps it', () => {
 })
 
 test('the estimate is read from the model leniently and clamped', () => {
-  expect(parseEstimate('```json\n{"percent": 140, "left": "done"}\n```')).toEqual({ percent: 100, left: 'done' })
-  expect(parseEstimate('{"percent": "37.6"}')).toEqual({ percent: 38, left: '' })
+  expect(parseEstimate('```json\n{"percent": 140, "left": "done"}\n```')).toEqual({ percent: 100, left: 'done', now: '' })
+  expect(parseEstimate('{"percent": "37.6"}')).toEqual({ percent: 38, left: '', now: '' })
   expect(parseEstimate('no idea')).toBe(null)
   expect(parseEstimate('{"percent": "lots"}')).toBe(null)
   expect(parseEstimate('{"percent": 90, "left": "x", "status": "blocked"}')?.status).toBe('error')
   expect(parseEstimate('{"percent": 90, "left": "x", "status": "question"}')?.status).toBe('question')
   expect(parseEstimate('{"percent": 90, "left": "x", "status": "maybe"}')?.status).toBe(undefined)
+  expect(parseEstimate('{"percent": 50, "left": "x", "now": "running tests", "short": "Share card clipping"}')).toEqual({
+    percent: 50,
+    left: 'x',
+    now: 'running tests',
+    short: 'Share card clipping',
+  })
 })
 
 test('without a verdict, a last message ending in a question mark is a question', () => {
@@ -73,6 +81,7 @@ test('the digest carries the goal, the tasks and the previous estimate, without 
     [{ content: 'cart', status: 'in_progress' }],
     { percent: 30, left: 'the cart' },
     true,
+    'Fix the clipping on the share card',
   )
 
   expect(text.includes('build a shop')).toBe(true)
@@ -81,6 +90,7 @@ test('the digest carries the goal, the tasks and the previous estimate, without 
   expect(text.includes('30% — left: the cart')).toBe(true)
   expect(text.includes('[tools: Edit]')).toBe(true)
   expect(text.includes("Claude's turn has just ended")).toBe(true)
+  expect(text.includes('SESSION NAME TO SHORTEN: Fix the clipping on the share card')).toBe(true)
 })
 
 test('the fingerprint moves when the transcript grows or a call settles', () => {
@@ -96,21 +106,40 @@ test('the title shows the bar only while working, and an emoji once the turn end
   const here = prefixFor(snap({ percent: 62 }))
   const away = prefixFor(snap({ isAway: true, contextFreePct: 80 }))
 
-  expect(here).toBe('🟩🟩🟩⬜⬜ 60% · ')
-  expect(away).toBe('🟦🟦🟦🟦⬜ 80% · ')
+  expect(here).toBe('[◑ 60%] ')
+  expect(away).toBe('[🔋 80%] ')
   expect(prefixFor(snap({ percent: null }))).toBe(null)
-  expect(prefixFor(snap({ status: 'question', isAway: true }))).toBe(`${STATUS_EMOJI.question} · `)
-  expect(prefixFor(snap({ status: 'done' }))).toBe(`${STATUS_EMOJI.done} · `)
-  expect(prefixFor(snap({ status: 'stopped' }))).toBe(`${STATUS_EMOJI.stopped} · `)
+  expect(prefixFor(snap({ status: 'question', isAway: true }))).toBe(`[${STATUS_EMOJI.question}] `)
+  expect(prefixFor(snap({ status: 'done' }))).toBe(`[${STATUS_EMOJI.done}] `)
+  expect(prefixFor(snap({ status: 'stopped' }))).toBe(`[${STATUS_EMOJI.stopped}] `)
   expect(prefixFor(snap({ status: 'idle' }))).toBe(null)
-  for (const emoji of Object.values(STATUS_EMOJI)) expect(stripPrefix(`${emoji} · ${here}Site`)).toBe('Site')
+  for (const emoji of Object.values(STATUS_EMOJI)) {
+    expect(stripPrefix(`[${emoji}] ${here}Site`)).toBe('Site')
+    expect(stripPrefix(`${emoji} · Site`)).toBe('Site')
+  }
+  expect(stripPrefix(`${away}Site`)).toBe('Site')
   expect(stripPrefix('🟩🟩🟩⬜⬜ 60% 💬 · Site')).toBe('Site')
   expect(stripPrefix('🚀 launch')).toBe('🚀 launch')
+  expect(stripPrefix('[draft] Site')).toBe('[draft] Site')
   expect(stripPrefix(`${here}Site`)).toBe('Site')
   expect(stripPrefix(`${away}${here}Site`)).toBe('Site')
   expect(stripPrefix('Site 50%')).toBe('Site 50%')
   // A prefix an earlier version wrote in Eastern Arabic digits.
   expect(stripPrefix('🟩🟩🟩🟩⬜ \u06F8\u06F0\u066A · Site')).toBe('Site')
+})
+
+test('the pie fills in quarter steps, and a long name is cut at a word', () => {
+  expect([0, 12, 13, 37, 38, 62, 63, 87, 88, 100].map(pie).join('')).toBe('○○◔◔◑◑◕◕●●')
+  expect(cutName('Fix the clipping on the share card')).toBe('Fix the clipping on…')
+  expect(cutName('Blog migration')).toBe('Blog migration')
+})
+
+test('the band names the full title the sidebar shortens, and the task in progress', () => {
+  const line = fit(partsFor(snap({ project: 'Fix the clipping on the share card', shortName: 'Share card clipping' }), 0), 500)
+
+  expect(line.includes('Fix the clipping on the share card')).toBe(true)
+  expect(line.includes('now: running tests')).toBe(true)
+  expect(fit(partsFor(snap({ status: 'done' }), 0), 500).includes('now:')).toBe(false)
 })
 
 test('the machine idle time is read from ioreg', () => {
@@ -132,14 +161,14 @@ test('a narrow line drops the estimator cost first and keeps the percent and wai
 })
 
 // The world beneath the mod: a session whose transcript, idle time and title the test controls.
-const world = (on: On, env: Record<string, string> = {}) => {
+const world = (on: On, env: Record<string, string> = {}, title = 'Site') => {
   const clock = mock.clock(on)
   mock.env(on, env)
   const state = {
     messages: [prompt('build a landing page')],
     idleNs: 5e9,
     asked: 0,
-    titles: ['Site'],
+    titles: [title],
     verdict: 'done',
     snapshot: null as Snapshot | null,
   }
@@ -180,7 +209,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
     return {
       value: {
         isAnswered: true as const,
-        text: JSON.stringify({ percent: 40, left: 'contact form', status: state.verdict }),
+        text: JSON.stringify({ percent: 40, left: 'contact form', now: 'writing the form', status: state.verdict, short: 'Share card clipping' }),
         usage: { input_tokens: 2000, output_tokens: 30, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
       },
     }
@@ -205,7 +234,7 @@ test('the model is asked once per change, and never while you are away', async (
   await clock.advance(2000)
   expect(state.asked).toBe(1)
   expect(state.snapshot?.percent).toBe(40)
-  expect(state.titles.at(-1)).toBe('🟩🟩⬜⬜⬜ 40% · Site')
+  expect(state.titles.at(-1)).toBe(`[${pie(40)} 40%] Site`)
 
   await clock.advance(60_000)
   expect(state.asked).toBe(1)
@@ -220,7 +249,7 @@ test('the model is asked once per change, and never while you are away', async (
   expect(state.asked).toBe(2)
   expect(state.snapshot?.isAway).toBe(true)
   expect(state.snapshot?.estimator.tokens).toBe(4060)
-  expect(state.titles.at(-1)).toBe('🟦🟦🟦🟦⬜ 75% · Site')
+  expect(state.titles.at(-1)).toBe('[🔋 75%] Site')
 
   // The turn ends on a question while you are away: one final estimate still reads why.
   state.verdict = 'question'
@@ -228,7 +257,7 @@ test('the model is asked once per change, and never while you are away', async (
   await clock.advance(1000)
   expect(state.asked).toBe(3)
   expect(state.snapshot?.status).toBe('question')
-  expect(state.titles.at(-1)).toBe(`${STATUS_EMOJI.question} · Site`)
+  expect(state.titles.at(-1)).toBe(`[${STATUS_EMOJI.question}] Site`)
   await clock.advance(60_000)
   expect(state.asked).toBe(3)
 
@@ -236,11 +265,27 @@ test('the model is asked once per change, and never while you are away', async (
   state.idleNs = 5e9
   await $.turn.start({ text: 'blue', turnId: 't2' })
   await clock.advance(1000)
-  expect(state.titles.at(-1)).toBe('🟩🟩⬜⬜⬜ 40% · Site')
+  expect(state.titles.at(-1)).toBe(`[${pie(40)} 40%] Site`)
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, reason: 'aborted', turnId: 't2' })
   await clock.advance(1000)
-  expect(state.titles.at(-1)).toBe(`${STATUS_EMOJI.stopped} · Site`)
+  expect(state.titles.at(-1)).toBe(`[${STATUS_EMOJI.stopped}] Site`)
   expect(state.asked).toBe(3)
+})
+
+test('a long name is shortened in the sidebar and kept whole in the snapshot', async ($, on) => {
+  const { clock, state } = world(on, {}, 'Fix the clipping on the share card')
+
+  await $.session.start({ cwd: '/work/site', surface: 'desktop', isInteractive: false })
+  await $.turn.start({ text: 'fix it', turnId: 't1' })
+  await clock.advance(2000)
+  expect(state.titles.at(-1)).toBe(`[${pie(40)} 40%] Share card clipping`)
+  expect(state.snapshot?.project).toBe('Fix the clipping on the share card')
+  expect(state.snapshot?.now).toBe('writing the form')
+
+  await $.turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, reason: 'answer', turnId: 't1' })
+  await clock.advance(1000)
+  expect(state.titles.at(-1)).toBe(`[${STATUS_EMOJI.done}] Share card clipping`)
+  expect(state.snapshot?.project).toBe('Fix the clipping on the share card')
 })
 
 test('the band draws the bar and the line on the terminal and the desktop', async ($, on) => {
@@ -305,7 +350,7 @@ test('the projects pane lists every session file with its bar, on every surface'
     })
 
     expect((await ui.find({ type: 'Text', text: /Shop/ }))?.text).toBe('Shop')
-    expect((await ui.find({ type: 'Text', text: /62%/ }))?.text.includes('left: test and deploy')).toBe(true)
+    expect((await ui.find({ type: 'Text', text: /62%/ }))?.text.includes('now: running tests')).toBe(true)
     await ui.unmount()
   }
 })

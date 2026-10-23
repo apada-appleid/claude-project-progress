@@ -2,30 +2,33 @@
 
 A Claude Code mod that shows how far each session's project has come, without opening the session.
 
-Every minute a small, cheap model (Haiku by default) reads a short digest of the session and estimates the share of the goal that is done. When you step away from the computer, estimates pause and the bar shows the context window left instead, so no tokens are spent while nobody is watching.
+Every minute a small, cheap model (Haiku by default) reads a short digest of the session and estimates the share of the goal that is done. When you step away from the computer, estimates pause and the progress gives way to the context window left, so no tokens are spent while nobody is watching.
 
 ## What you see
 
 **In the sidebar** (Claude desktop app): the start of each session's title says what the session is doing.
 
 ```
-🟩🟩🟩⬜⬜ 60% · my-landing-page     ← working
-🟦🟦🟦🟦⬜ 80% · api-refactor        ← working while you are away: blue shows the context left
-❓ · docs-site                      ← waiting for your answer
-✅ · blog-redesign                  ← done
-⏹️ · data-import                    ← stopped by you
-⚠️ · deploy-script                  ← stopped on an error
+[◑ 60%] Share card clipping      ← working: the pie fills in quarters (○ ◔ ◑ ◕ ●)
+[🔋 75%] API refactor             ← working while you are away: the context left
+[❓] Docs site search             ← waiting for your answer
+[✅] Blog migration               ← done
+[⏹️] Data import                  ← stopped by you
+[⚠️] Deploy script                ← stopped on an error
 ```
 
-The bar shows only while Claude is working, so the sidebar stays quiet. When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once. The title changes only when its prefix changes (the bar in 5% steps), not every minute.
+- What the mod adds sits in brackets, so it never reads as part of the name.
+- The pie and percent show only while Claude is working, so the sidebar stays quiet. When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once.
+- A name longer than 22 characters is shown shortened: the same estimate gives a version of 3 words at most ("Fix the clipping on the share card" becomes "Share card clipping"). The full name stays in the line above the prompt, and `/progress title off` puts it back in the title. Rename a session and the mod takes the new name.
+- The title changes only when what it shows changes (the percent in 5% steps), not every minute.
 
 **Above the prompt**: one line with a colored bar and the details.
 
 ```
-████████░░░░ 62% · 3/5 steps · left: tests and deploy · context 41% free · 5h limit 34% · ⏱ 1h 20m · estimator today 12k tokens
+████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · context 41% free · 5h limit 34% · ⏱ 1h 20m · estimator today 12k tokens
 ```
 
-Once the turn ends, the line starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...). When the line is too narrow, the least important parts drop first: the estimator's cost, the time, the 5-hour limit, then what is left.
+The full name shows when the sidebar shortens it, and `now:` is the task list's step in progress, or the model's words for what Claude is doing. Once the turn ends, the line starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...). When the line is too narrow, the least important parts drop first: the estimator's cost, the time, the 5-hour limit, then what is left.
 
 **The projects pane**: `/progress` (or the **Projects** button on the line) opens a pane that lists every session running the mod, each with its own bar and details.
 
@@ -34,7 +37,8 @@ Once the turn ends, the line starts with the session's status (`❓ waiting for 
 - The model is asked only when the session changed since the last estimate. A session waiting for you costs nothing.
 - Nothing is estimated while you are away: no mouse or keyboard input for 3 minutes (read from the machine's idle time on macOS). The one exception is the single estimate when a turn ends, which tells a question from a finished job.
 - Each estimate costs about 1.5–3k tokens: a digest of the goal, Claude's task list, the previous estimate and the last 10 messages, each cut short.
-- The step count (`3/5 steps`) is read straight from Claude's task list and costs no tokens.
+- The step count (`3/5 steps`) and the step in progress are read straight from Claude's task list and cost no tokens.
+- The end-of-turn status and the short name ride on the same estimate, so they cost no extra call.
 - A daily cap per session stops estimates once the estimator has used 400k tokens that day.
 
 ## Install

@@ -28,6 +28,8 @@ export const partsFor = (s: Snapshot, now: number): Part[] => {
   const parts: Part[] = []
   const said = STATUS_TEXT[s.status]
   if (said !== undefined) parts.push({ text: `${STATUS_EMOJI[s.status] ?? ''} ${said}`, drop: 0 })
+  // The sidebar shows a short name; here is the full one.
+  if (s.shortName !== null) parts.push({ text: s.project, drop: 2 })
 
   if (s.isAway && s.status === 'working') {
     parts.push({ text: s.contextFreePct === null ? 'context ?' : `context ${s.contextFreePct}% free`, drop: 0 })
@@ -35,6 +37,7 @@ export const partsFor = (s: Snapshot, now: number): Part[] => {
     if (s.percent !== null) parts.push({ text: `last estimate ${s.percent}%`, drop: 2 })
   } else {
     parts.push({ text: s.percent === null ? 'estimating…' : `${s.percent}%`, drop: 0 })
+    if (s.status === 'working' && s.now !== '') parts.push({ text: `now: ${s.now}`, drop: 1 })
     if (s.steps !== null) parts.push({ text: `${s.steps.done}/${s.steps.total} steps`, drop: 1 })
     if (s.left !== '') parts.push({ text: `left: ${s.left}`, drop: 4 })
     if (s.contextFreePct !== null) parts.push({ text: `context ${s.contextFreePct}% free`, drop: 1 })
