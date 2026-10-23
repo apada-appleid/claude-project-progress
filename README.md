@@ -34,7 +34,9 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 - The second bar is the context window: blue while there is room, yellow from 70% full, red from 85%.
 - When a row is too narrow, its least important parts drop first.
 
-**The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows.
+**The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows: what needs you first, then what is working.
+
+**The projects window**: `/progress window` (or the **Window** button above the prompt, or **Open in a window** in the pane) opens every project in a window of its own, outside any session: a Chrome app window, or your default browser when Chrome is not there. It is a local page (`~/.claude/project-progress/dashboard.html`) that every running session rewrites as it checks in, and it reloads itself every 10 seconds.
 
 ## How it keeps token use low
 
@@ -68,6 +70,7 @@ New sessions load the mod by themselves. In a session that is already open, run 
 | Command | What it does |
 | --- | --- |
 | `/progress` | Open the projects pane |
+| `/progress window` | Open every project in a window of its own |
 | `/progress now` | Estimate right away, even if nothing changed |
 | `/progress title off` | Remove the bar from this session's title |
 | `/progress title on` | Put it back |

@@ -5,6 +5,7 @@ import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
 import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { runningShells } from './background'
+import { dashboardHtml, parseSnapshot, sortProjects, STALE_MS } from './dashboard'
 import { BAR_CELLS, BAR_PX, cells, ctxColor, ctxUsed, fit, GREEN, progressParts, svgBar, usageParts } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
@@ -16,7 +17,6 @@ const tick = atom({ plugin: 'project-progress', key: 'tick' } as const, 0)
 
 const PANE = 'projects'
 const PANE_TITLE = 'Project progress'
-const STALE_MS = 10 * 60_000
 const WEEK_MS = 7 * 24 * 3600_000
 
 // 'quiet' never estimates, 'tick' when something changed, 'force' always, and 'final', once a turn
@@ -29,6 +29,7 @@ const RANK: Readonly<Record<Mode, number>> = { quiet: 0, tick: 1, force: 2, fina
 type Session = {
   refresh: (mode: Mode) => Promise<void>
   clearTitle: () => Promise<void>
+  openWindow: () => Promise<string>
 }
 
 // The session's title as read back: the app's id and title, the mod's record, and the full name.
@@ -154,6 +155,48 @@ export const register: Register = (on, options) => {
       }
     }
 
+    // Every session's latest snapshot, from the files each one writes.
+    const loadAll = async (now: number): Promise<Snapshot[]> => {
+      const dir = `${sharedDir}/sessions`
+      try {
+        const files = (await $.fs.list(dir)).filter(
+          f => f.kind === 'file' && f.name.endsWith('.json') && now - f.mtimeMs < WEEK_MS,
+        )
+        const loaded = await Promise.all(files.map(f => $.fs.read(`${dir}/${f.name}`).then(parseSnapshot).catch(() => null)))
+
+        return loaded.filter((s): s is Snapshot => s !== null)
+      } catch {
+        return []
+      }
+    }
+
+    const dashboardFile = () => `${sharedDir}/dashboard.html`
+
+    // The page the projects window shows: any session that refreshes rewrites it with all of them.
+    const writeDashboard = async (now: number): Promise<void> => {
+      await $.fs.write(dashboardFile(), dashboardHtml(await loadAll(now), now)).catch(() => undefined)
+    }
+
+    // A window of its own (a Chrome app window, else the default browser), not tied to any session.
+    const openWindow = async (): Promise<string> => {
+      if (sharedDir === '') return 'There is no home folder to keep the projects page in.'
+      await writeDashboard(await $.clock.now())
+      const url = `file://${encodeURI(dashboardFile())}`
+
+      try {
+        const chrome = await $.process.run(['open', '-na', 'Google Chrome', '--args', `--app=${url}`, '--window-size=520,760'], {
+          timeoutMs: 10_000,
+        })
+        if (chrome.exitCode === 0) return 'Projects window opened.'
+        const plain = await $.process.run(['open', dashboardFile()], { timeoutMs: 10_000 })
+        if (plain.exitCode === 0) return 'Projects window opened in your browser.'
+      } catch {
+        // No host commands here.
+      }
+
+      return `Open ${dashboardFile()} in a browser to see every project.`
+    }
+
     const refresh = async (mode: Mode): Promise<void> => {
       if (isBusy) {
         again = again === null || RANK[mode] > RANK[again] ? mode : again
@@ -269,6 +312,7 @@ export const register: Register = (on, options) => {
         await update($, tick, n => n + 1)
         if (sharedDir !== '') {
           await $.fs.write(`${sharedDir}/sessions/${sessionId}.json`, JSON.stringify(fresh)).catch(() => undefined)
+          await writeDashboard(now)
         }
       } finally {
         isBusy = false
@@ -278,12 +322,13 @@ export const register: Register = (on, options) => {
       }
     }
 
-    session = { refresh, clearTitle }
+    session = { refresh, clearTitle, openWindow }
 
     await $.command.register({
       name: 'progress',
-      description: 'Project progress: open the projects pane; "now" estimates at once; "title off|on" toggles the bar in the session title',
-      argumentHint: '[now | title off | title on]',
+      description:
+        'Project progress: open the projects pane; "window" opens every project in a window of its own; "now" estimates at once; "title off|on" toggles the bar in the session title',
+      argumentHint: '[window | now | title off | title on]',
     })
     $.clock.every(intervalMs, () => void refresh('tick'))
     $.clock.after(2000, () => void refresh('tick'))
@@ -350,6 +395,9 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'progress' }, async ($, e) => {
     const args = e.args.trim()
 
+    if (args === 'window') {
+      return { text: (await session?.openWindow()) ?? 'The session is not ready yet.' }
+    }
     if (args === 'now') {
       await session?.refresh('force')
       return { text: 'Fresh estimate done.' }
@@ -406,6 +454,7 @@ export const register: Register = (on, options) => {
             {bar(s.percent ?? 0, GREEN)}
             <Text wrap="truncate-end">{progress}</Text>
             <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+            <Button key="window" label="Window" plain dimColor onPress={() => void session?.openWindow()} />
           </Box>
           <Box flexDirection="row" gap={1}>
             {bar(used, ctxColor(s))}
@@ -425,6 +474,7 @@ export const register: Register = (on, options) => {
           <Svg source={svgBar(s.percent ?? 0, GREEN)} alt={`${s.percent ?? 0}% done`} width={BAR_PX} height={8} />
           <Text wrap="truncate-end">{progress}</Text>
           <Button key="open" label="Projects" plain dimColor onPress={() => void $.ui.open({ id: PANE, title: PANE_TITLE })} />
+            <Button key="window" label="Window" plain dimColor onPress={() => void session?.openWindow()} />
         </Box>
         <Box flexDirection="row" gap={1} alignItems="center">
           <Svg source={svgBar(used, ctxColor(s))} alt={`context ${used}% full`} width={BAR_PX} height={8} />
@@ -448,27 +498,8 @@ export const register: Register = (on, options) => {
         const files = (await $.fs.list(dir)).filter(
           f => f.kind === 'file' && f.name.endsWith('.json') && now - f.mtimeMs < WEEK_MS,
         )
-        const loaded = await Promise.all(
-          files.map(f =>
-            $.fs
-              .read(`${dir}/${f.name}`)
-              // A session still on an earlier version writes fewer fields.
-              .then(
-                text =>
-                  ({
-                    shortName: null,
-                    now: '',
-                    status: 'idle',
-                    background: 0,
-                    contextTokens: null,
-                    contextWindow: null,
-                    ...(JSON.parse(text) as object),
-                  }) as Snapshot,
-              )
-              .catch(() => null),
-          ),
-        )
-        list = loaded.filter((s): s is Snapshot => s !== null).sort((a, b) => b.updatedAt - a.updatedAt)
+        const loaded = await Promise.all(files.map(f => $.fs.read(`${dir}/${f.name}`).then(parseSnapshot).catch(() => null)))
+        list = sortProjects(loaded.filter((s): s is Snapshot => s !== null))
       } catch {
         list = []
       }
@@ -479,7 +510,7 @@ export const register: Register = (on, options) => {
     const name = (s: Snapshot) => `${s.project}${isStale(s) ? ' — last estimate' : ''}`
 
     if (e.surface === 'terminal') {
-      const { Box, Text } = $.ui.resolve(e)
+      const { Box, Button, Text } = $.ui.resolve(e)
       const row = (pct: number, color: string, text: string) => {
         const [full, empty] = cells(pct)
 
@@ -498,13 +529,14 @@ export const register: Register = (on, options) => {
 
       return (
         <Box flexDirection="column" gap={1}>
+          <Button key="window" label="Open in a window" plain onPress={() => void session?.openWindow()} />
           {list.length === 0 && <Text dimColor>No projects yet.</Text>}
           {list.map(s => (
             <Box key={s.sessionId} flexDirection="column">
               <Text bold dimColor={isStale(s)} wrap="truncate-end">
                 {name(s)}
               </Text>
-              {row(s.percent ?? 0, GREEN, fit(progressParts(s, now), columns))}
+              {row(s.percent ?? 0, GREEN, fit(progressParts(s, now, false), columns))}
               {row(ctxUsed(s) ?? 0, ctxColor(s), fit(usageParts(s), columns))}
             </Box>
           ))}
@@ -512,7 +544,7 @@ export const register: Register = (on, options) => {
       )
     }
 
-    const { Box, Svg, Text } = $.ui.resolve(e)
+    const { Box, Button, Svg, Text } = $.ui.resolve(e)
     const row = (pct: number, color: string, alt: string, text: string) => (
       <Box flexDirection="row" gap={1} alignItems="center">
         <Svg source={svgBar(pct, color)} alt={alt} width={BAR_PX} height={8} />
@@ -524,13 +556,14 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        <Button key="window" label="Open in a window" plain onPress={() => void session?.openWindow()} />
         {list.length === 0 && <Text dimColor>No projects yet.</Text>}
         {list.map(s => (
           <Box key={s.sessionId} flexDirection="column">
             <Text bold dimColor={isStale(s)} wrap="truncate-end">
               {name(s)}
             </Text>
-            {row(s.percent ?? 0, GREEN, `${s.percent ?? 0}% done`, fit(progressParts(s, now), columns))}
+            {row(s.percent ?? 0, GREEN, `${s.percent ?? 0}% done`, fit(progressParts(s, now, false), columns))}
             {row(ctxUsed(s) ?? 0, ctxColor(s), `context ${ctxUsed(s) ?? 0}% full`, fit(usageParts(s), columns))}
           </Box>
         ))}

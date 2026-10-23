@@ -40,13 +40,13 @@ export const ctxColor = (s: Snapshot): string => {
   return used >= CTX_FULL ? RED : used >= CTX_WARN ? YELLOW : BLUE
 }
 
-// The first row: how far the work is.
-export const progressParts = (s: Snapshot, now: number): Part[] => {
+// The first row: how far the work is. Where a heading already names the project, leave the name out.
+export const progressParts = (s: Snapshot, now: number, withName = true): Part[] => {
   const parts: Part[] = []
   const said = STATUS_TEXT[s.status]
   if (said !== undefined) parts.push({ text: `${STATUS_EMOJI[s.status] ?? ''} ${said}`, drop: 0 })
   // The sidebar shows a short name; here is the full one.
-  if (s.shortName !== null) parts.push({ text: s.project, drop: 2 })
+  if (withName && s.shortName !== null) parts.push({ text: s.project, drop: 2 })
 
   parts.push({ text: s.percent === null ? 'estimating…' : `${s.percent}%`, drop: 0 })
   if (s.isAway && s.status === 'working') parts.push({ text: '⏸ estimates paused while you are away', drop: 3 })
@@ -83,7 +83,9 @@ export const fit = (parts: readonly Part[], columns: number): string => {
     kept = kept.filter((_, i) => i !== at)
   }
 
-  return kept.map(part => part.text).join(' · ')
+  // Each part isolated from its neighbours' direction, so a name or step in a right-to-left script
+  // keeps the line's order.
+  return kept.map(part => `\u2068${part.text}\u2069`).join(' · ')
 }
 
 export const svgBar = (pct: number, color: string): string => {
