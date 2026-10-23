@@ -62,7 +62,7 @@ export const progressParts = (s: Snapshot, now: number, withName = true): Part[]
 // The second row: how much of the context, the plan and the estimator is used.
 export const usageParts = (s: Snapshot): Part[] => {
   const used = ctxUsed(s)
-  const parts: Part[] = [{ text: `ctx ${used ?? '?'}%`, drop: 0 }]
+  const parts: Part[] = [{ text: `context ${used ?? '?'}%`, drop: 0 }]
   if (s.contextTokens !== null && s.contextWindow !== null) {
     parts.push({ text: `${tokens(s.contextTokens)} of ${tokens(s.contextWindow)}`, drop: 3 })
   }

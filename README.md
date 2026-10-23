@@ -4,6 +4,8 @@ A Claude Code mod that shows how far each session's project has come, without op
 
 Every minute a small, cheap model (Haiku by default) reads a short digest of the session and estimates the share of the goal that is done. When you step away from the computer, estimates pause and the progress gives way to how full the context window is, so no tokens are spent while nobody is watching.
 
+![Session titles in the sidebar, and the two rows above the prompt](docs/overview.png)
+
 ## What you see
 
 **In the sidebar** (Claude desktop app): the start of each session's title says what the session is doing.
@@ -27,7 +29,7 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 
 ```
 ████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · ⏱ 1h 20m
-███████░░░░░ ctx 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens
+███████░░░░░ context 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens
 ```
 
 - The first bar is green. The full name shows when the sidebar shortens it, and `now:` is the task list's step in progress, or the model's words for what Claude is doing. Once the turn ends, the row starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...).
@@ -37,6 +39,8 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 **The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows: what needs you first, then what is working.
 
 **The projects window**: `/progress window` (or the **Window** button above the prompt, or **Open in a window** in the pane) opens every project in a window of its own, outside any session: a Chrome app window, or your default browser when Chrome is not there. It is a local page (`~/.claude/project-progress/dashboard.html`) that every running session rewrites as it checks in, and it reloads itself every 10 seconds.
+
+<img src="docs/window.png" width="540" alt="The projects window: every session with its progress and context bars, what needs you first">
 
 ## How it keeps token use low
 

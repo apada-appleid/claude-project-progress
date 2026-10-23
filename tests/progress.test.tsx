@@ -190,9 +190,9 @@ test('each row drops its least important parts first', () => {
   expect(fit(progressParts(snap({ isAway: true }), 0), 500).includes('paused while you are away')).toBe(true)
 
   const usage = usageParts(snap({ contextTokens: 118_000, contextWindow: 200_000 }))
-  expect(plain(fit(usage, 500))).toBe('ctx 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens')
-  expect(plain(fit(usage, 20))).toBe('ctx 59%')
-  expect(fit(usage, 20)).toBe('\u2068ctx 59%\u2069')
+  expect(plain(fit(usage, 500))).toBe('context 59% · 118k of 200k · 5h limit 34% · estimator today 12k tokens')
+  expect(plain(fit(usage, 20))).toBe('context 59%')
+  expect(fit(usage, 20)).toBe('\u2068context 59%\u2069')
 })
 
 test('the context bar is blue, then yellow, then red as it fills', () => {
@@ -372,7 +372,7 @@ test('the band draws the bar and the line on the terminal and the desktop', asyn
         },
       })
       const progress = await ui.find({ type: 'Text', text: /40%/ })
-      const usage = await ui.find({ type: 'Text', text: /ctx 25%/ })
+      const usage = await ui.find({ type: 'Text', text: /context 25%/ })
 
       expect(progress?.text.includes('left: contact form')).toBe(bodyColumns === 160)
       expect(usage?.text.includes('50k of 200k')).toBe(bodyColumns === 160)
@@ -413,7 +413,7 @@ test('the projects pane lists every session file with its bar, on every surface'
 
     expect((await ui.find({ type: 'Text', text: /Shop/ }))?.text).toBe('Shop')
     expect((await ui.find({ type: 'Text', text: /62%/ }))?.text.includes('now: running tests')).toBe(true)
-    expect(await ui.find({ type: 'Text', text: /ctx 59%/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /context 59%/ })).toBeDefined()
     expect(await ui.find({ key: 'window' })).toBeDefined()
     await ui.unmount()
   }
