@@ -27,6 +27,7 @@ const snap = (over: Partial<Snapshot>): Snapshot => ({
   contextFreePct: 41,
   rate5hPct: 34,
   status: 'working',
+  background: 0,
   isAway: false,
   idleSource: 'machine',
   startedAt: 0,
@@ -107,7 +108,7 @@ test('the title shows the bar only while working, and an emoji once the turn end
   const away = prefixFor(snap({ isAway: true, contextFreePct: 80 }))
 
   expect(here).toBe('[◑ 60%] ')
-  expect(away).toBe('[🔋 80%] ')
+  expect(away).toBe('[ctx 20%] ')
   expect(prefixFor(snap({ percent: null }))).toBe(null)
   expect(prefixFor(snap({ status: 'question', isAway: true }))).toBe(`[${STATUS_EMOJI.question}] `)
   expect(prefixFor(snap({ status: 'done' }))).toBe(`[${STATUS_EMOJI.done}] `)
@@ -118,6 +119,7 @@ test('the title shows the bar only while working, and an emoji once the turn end
     expect(stripPrefix(`${emoji} · Site`)).toBe('Site')
   }
   expect(stripPrefix(`${away}Site`)).toBe('Site')
+  expect(stripPrefix('[🔋 75%] Site')).toBe('Site')
   expect(stripPrefix('🟩🟩🟩⬜⬜ 60% 💬 · Site')).toBe('Site')
   expect(stripPrefix('🚀 launch')).toBe('🚀 launch')
   expect(stripPrefix('[draft] Site')).toBe('[draft] Site')
@@ -157,7 +159,8 @@ test('a narrow line drops the estimator cost first and keeps the percent and wai
   expect(narrow.includes('estimator today')).toBe(false)
   expect(narrow.includes('62%')).toBe(true)
   expect(narrow.includes('waiting for your answer')).toBe(true)
-  expect(fit(partsFor(snap({ isAway: true }), 0), 500).includes('context 41% free')).toBe(true)
+  expect(fit(partsFor(snap({ isAway: true }), 0), 500).includes('ctx 59%')).toBe(true)
+  expect(fit(partsFor(snap({ background: 2 }), 0), 500).includes('⟳ 2 in background')).toBe(true)
 })
 
 // The world beneath the mod: a session whose transcript, idle time and title the test controls.
@@ -194,6 +197,7 @@ const world = (on: On, env: Record<string, string> = {}, title = 'Site') => {
     },
   }))
   on('session.messages', () => ({ value: state.messages }))
+  on('agent.list', () => ({ value: [] }))
   on('process.run', () => ({
     value: {
       exitCode: 0,
@@ -249,7 +253,7 @@ test('the model is asked once per change, and never while you are away', async (
   expect(state.asked).toBe(2)
   expect(state.snapshot?.isAway).toBe(true)
   expect(state.snapshot?.estimator.tokens).toBe(4060)
-  expect(state.titles.at(-1)).toBe('[🔋 75%] Site')
+  expect(state.titles.at(-1)).toBe('[ctx 25%] Site')
 
   // The turn ends on a question while you are away: one final estimate still reads why.
   state.verdict = 'question'
@@ -288,6 +292,25 @@ test('a long name is shortened in the sidebar and kept whole in the snapshot', a
   expect(state.snapshot?.project).toBe('Fix the clipping on the share card')
 })
 
+test('background work keeps a finished turn working until its task ends', async ($, on) => {
+  const { clock, state } = world(on)
+  const shell = { ...use('Bash', { command: 'render.sh' }), text: 'started', result: { backgroundTaskId: 'b1' } }
+
+  await $.session.start({ cwd: '/work/site', surface: 'desktop', isInteractive: false })
+  await $.turn.start({ text: 'render it', turnId: 't1' })
+  state.messages = [...state.messages, reply('Rendering in the background.', [shell])]
+  await clock.advance(2000)
+  await $.turn.complete({ answer: 'Rendering.', durationMs: 1, isAborted: false, reason: 'answer', turnId: 't1' })
+  await clock.advance(1000)
+  expect(state.snapshot?.background).toBe(1)
+  expect(state.titles.at(-1)).toBe(`[${pie(40)} 40%] Site`)
+
+  state.messages = [...state.messages, prompt('<task-notification><task-id>b1</task-id><status>completed</status></task-notification>')]
+  await clock.advance(60_000)
+  expect(state.snapshot?.background).toBe(0)
+  expect(state.titles.at(-1)).toBe(`[${STATUS_EMOJI.done}] Site`)
+})
+
 test('the band draws the bar and the line on the terminal and the desktop', async ($, on) => {
   const { clock } = world(on)
 
@@ -313,7 +336,7 @@ test('the band draws the bar and the line on the terminal and the desktop', asyn
       const line = await ui.find({ type: 'Text', text: /40%/ })
 
       expect(line?.text.includes('left: contact form')).toBe(bodyColumns === 160)
-      expect(line?.text.includes('context 75% free')).toBe(true)
+      expect(line?.text.includes('ctx 25%')).toBe(true)
       expect(await ui.find({ key: 'open' })).toBeDefined()
       await ui.unmount()
     }

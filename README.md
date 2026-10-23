@@ -2,7 +2,7 @@
 
 A Claude Code mod that shows how far each session's project has come, without opening the session.
 
-Every minute a small, cheap model (Haiku by default) reads a short digest of the session and estimates the share of the goal that is done. When you step away from the computer, estimates pause and the progress gives way to the context window left, so no tokens are spent while nobody is watching.
+Every minute a small, cheap model (Haiku by default) reads a short digest of the session and estimates the share of the goal that is done. When you step away from the computer, estimates pause and the progress gives way to how full the context window is, so no tokens are spent while nobody is watching.
 
 ## What you see
 
@@ -10,7 +10,7 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 
 ```
 [◑ 60%] Share card clipping      ← working: the pie fills in quarters (○ ◔ ◑ ◕ ●)
-[🔋 75%] API refactor             ← working while you are away: the context left
+[ctx 25%] API refactor            ← working while you are away: how full the context is
 [❓] Docs site search             ← waiting for your answer
 [✅] Blog migration               ← done
 [⏹️] Data import                  ← stopped by you
@@ -18,14 +18,15 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 ```
 
 - What the mod adds sits in brackets, so it never reads as part of the name.
-- The pie and percent show only while Claude is working, so the sidebar stays quiet. When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once.
+- The pie and percent show only while Claude is working, so the sidebar stays quiet. Background work (a shell or a subagent still running after the turn) counts as working.
+- When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once. `[❓]` shows only when Claude actually asked you something.
 - A name longer than 22 characters is shown shortened: the same estimate gives a version of 3 words at most ("Fix the clipping on the share card" becomes "Share card clipping"). The full name stays in the line above the prompt, and `/progress title off` puts it back in the title. Rename a session and the mod takes the new name.
 - The title changes only when what it shows changes (the percent in 5% steps), not every minute.
 
 **Above the prompt**: one line with a colored bar and the details.
 
 ```
-████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · context 41% free · 5h limit 34% · ⏱ 1h 20m · estimator today 12k tokens
+████████░░░░ Fix the clipping on the share card · 62% · now: running the checkout tests · 3/5 steps · left: tests and deploy · ctx 59% · 5h limit 34% · ⏱ 1h 20m · estimator today 12k tokens
 ```
 
 The full name shows when the sidebar shortens it, and `now:` is the task list's step in progress, or the model's words for what Claude is doing. Once the turn ends, the line starts with the session's status (`❓ waiting for your answer`, `✅ done`, ...). When the line is too narrow, the least important parts drop first: the estimator's cost, the time, the 5-hour limit, then what is left.

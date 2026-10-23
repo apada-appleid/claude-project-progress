@@ -29,6 +29,8 @@ export type Snapshot = {
   contextFreePct: number | null
   rate5hPct: number | null
   status: Status
+  /** Background shells and subagents still running; a session with any is still working. */
+  background: number
   isAway: boolean
   /** Where "away" was judged from: the machine's idle time, the last prompt in any session, or nothing. */
   idleSource: 'machine' | 'prompt' | null

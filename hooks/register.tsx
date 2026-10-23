@@ -4,6 +4,7 @@ import type { Register } from 'claude-code'
 import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
 import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
+import { runningShells } from './background'
 import { BAR_CELLS, BAR_PX, barColor, barPct, cells, fit, partsFor, svgBar } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
@@ -47,16 +48,36 @@ export const register: Register = (on, options) => {
 
   let session: Session | null = null
   let sharedDir = ''
-  let status: Status = 'idle'
   // Counts the main loop's turns, so a turn's late verdict never lands on the next one.
   let turn = 0
+  let isTurnOpen = false
+  // A question or a plan waiting for your answer, inside a turn.
+  let isAsking = false
+  // Between a turn's end and the final estimate's verdict, the session still reads as working.
+  let isAwaitingVerdict = false
+  // How the last turn ended: stopped by you or an error (known at once), else the model's verdict.
+  let ending: Status | null = null
+  let verdict: Status | null = null
+
+  // Working while a turn runs or background work goes on; a question only when Claude asked one.
+  const statusOf = (background: number): Status => {
+    if (isAsking) return 'question'
+    if (isTurnOpen || isAwaitingVerdict) return 'working'
+    if (ending !== null) return ending
+    if (verdict === 'question') return 'question'
+    if (background > 0) return 'working'
+
+    return verdict ?? 'idle'
+  }
   let isTitleOn = options.renameTitles !== false
 
   on('session.start', async ($, e, next) => {
     const sessionId = fileName(await $.session.id())
     const home = await $.env.get('HOME')
     sharedDir = home === undefined ? '' : `${home}/.claude/project-progress`
-    status = (await read($, snapshot))?.status ?? 'idle'
+    const before = (await read($, snapshot))?.status
+    ending = before === 'stopped' ? before : null
+    verdict = before === 'question' || before === 'done' || before === 'error' ? before : null
 
     let lastFingerprint = ''
     let isBusy = false
@@ -198,9 +219,13 @@ export const register: Register = (on, options) => {
             if (isShortWanted && base !== null && estimate.short !== undefined) short = { for: base, text: estimate.short }
           }
         }
-        if (mode === 'final' && ofTurn === turn && status === 'working') {
-          status = estimate?.status ?? guessStatus(messages)
+        if (mode === 'final' && ofTurn === turn && !isTurnOpen) {
+          verdict = estimate?.status ?? guessStatus(messages)
+          isAwaitingVerdict = false
         }
+        const agents = (await $.agent.list()).filter(a => a.status === 'pending' || a.status === 'running' || a.status === 'waiting')
+        const background = runningShells(messages).length + agents.length
+        const status = statusOf(background)
         // The task list's step in progress says what Claude is doing better than any guess.
         const step = items?.find(item => item.status === 'in_progress')?.content
         if (step !== undefined && step !== '') doing = step.length > 60 ? `${step.slice(0, 59)}…` : step
@@ -217,6 +242,7 @@ export const register: Register = (on, options) => {
           contextFreePct: usage.context.percent === undefined ? null : 100 - usage.context.percent,
           rate5hPct: rate === undefined ? null : Math.round(rate.percentUsed),
           status,
+          background,
           isAway,
           idleSource: idle.source,
           startedAt: usage.startedAt,
@@ -266,7 +292,10 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       turn += 1
-      status = 'working'
+      isTurnOpen = true
+      isAwaitingVerdict = false
+      ending = null
+      verdict = null
       $.clock.after(300, () => void session?.refresh('quiet'))
     }
 
@@ -278,10 +307,12 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined) {
+      isTurnOpen = false
       if (e.reason === 'answer') {
+        isAwaitingVerdict = true
         $.clock.after(300, () => void session?.refresh('final'))
       } else {
-        status = e.reason === 'aborted' ? 'stopped' : 'error'
+        ending = e.reason === 'aborted' ? 'stopped' : 'error'
         $.clock.after(300, () => void session?.refresh('quiet'))
       }
     }
@@ -291,16 +322,17 @@ export const register: Register = (on, options) => {
 
   // A question or a plan waiting for your answer holds the turn open: show it as a question meanwhile.
   on('tool.call', async ($, e, next) => {
-    const isAsking = e.agentId === undefined && (e.tool === 'AskUserQuestion' || e.tool === 'ExitPlanMode')
-    if (!isAsking) return next(e)
+    const asks = e.agentId === undefined && (e.tool === 'AskUserQuestion' || e.tool === 'ExitPlanMode')
+    if (!asks) return next(e)
 
-    status = 'question'
+    isAsking = true
     $.clock.after(0, () => void session?.refresh('quiet'))
-    const ran = await next(e)
-    if (status === 'question') status = 'working'
-    $.clock.after(0, () => void session?.refresh('quiet'))
-
-    return ran
+    try {
+      return await next(e)
+    } finally {
+      isAsking = false
+      $.clock.after(0, () => void session?.refresh('quiet'))
+    }
   })
 
   // Where the machine cannot report its idle time, a prompt in any session marks you present.
@@ -396,7 +428,7 @@ export const register: Register = (on, options) => {
             $.fs
               .read(`${dir}/${f.name}`)
               // A session still on an earlier version writes fewer fields.
-              .then(text => ({ shortName: null, now: '', status: 'idle', ...(JSON.parse(text) as object) }) as Snapshot)
+              .then(text => ({ shortName: null, now: '', status: 'idle', background: 0, ...(JSON.parse(text) as object) }) as Snapshot)
               .catch(() => null),
           ),
         )

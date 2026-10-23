@@ -24,6 +24,11 @@ const elapsed = (ms: number): string => {
 
 const tokens = (n: number): string => (n < 1000 ? String(n) : `${Math.round(n / 1000)}k`)
 
+// How full the context window is.
+export const ctxUsed = (s: Snapshot): number | null => (s.contextFreePct === null ? null : 100 - s.contextFreePct)
+
+const ctxText = (s: Snapshot): string => `ctx ${ctxUsed(s) ?? '?'}%`
+
 export const partsFor = (s: Snapshot, now: number): Part[] => {
   const parts: Part[] = []
   const said = STATUS_TEXT[s.status]
@@ -32,7 +37,7 @@ export const partsFor = (s: Snapshot, now: number): Part[] => {
   if (s.shortName !== null) parts.push({ text: s.project, drop: 2 })
 
   if (s.isAway && s.status === 'working') {
-    parts.push({ text: s.contextFreePct === null ? 'context ?' : `context ${s.contextFreePct}% free`, drop: 0 })
+    parts.push({ text: ctxText(s), drop: 0 })
     parts.push({ text: '⏸ estimates paused while you are away', drop: 3 })
     if (s.percent !== null) parts.push({ text: `last estimate ${s.percent}%`, drop: 2 })
   } else {
@@ -40,8 +45,9 @@ export const partsFor = (s: Snapshot, now: number): Part[] => {
     if (s.status === 'working' && s.now !== '') parts.push({ text: `now: ${s.now}`, drop: 1 })
     if (s.steps !== null) parts.push({ text: `${s.steps.done}/${s.steps.total} steps`, drop: 1 })
     if (s.left !== '') parts.push({ text: `left: ${s.left}`, drop: 4 })
-    if (s.contextFreePct !== null) parts.push({ text: `context ${s.contextFreePct}% free`, drop: 1 })
+    if (s.contextFreePct !== null) parts.push({ text: ctxText(s), drop: 1 })
   }
+  if (s.background > 0) parts.push({ text: `⟳ ${s.background} in background`, drop: 1 })
   if (s.rate5hPct !== null) parts.push({ text: `5h limit ${s.rate5hPct}%`, drop: 5 })
   parts.push({ text: `⏱ ${elapsed(now - s.startedAt)}`, drop: 6 })
   parts.push({ text: `estimator today ${tokens(s.estimator.tokens)} tokens`, drop: 7 })
@@ -66,7 +72,7 @@ export const fit = (parts: readonly Part[], columns: number): string => {
 // Green for the estimate while you are here, blue for the context left while you are away.
 const isPaused = (s: Snapshot): boolean => s.isAway && s.status === 'working'
 
-export const barPct = (s: Snapshot): number => (isPaused(s) ? s.contextFreePct : s.percent) ?? 0
+export const barPct = (s: Snapshot): number => (isPaused(s) ? ctxUsed(s) : s.percent) ?? 0
 
 export const barColor = (s: Snapshot): string => (isPaused(s) ? BLUE : GREEN)
 
