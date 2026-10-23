@@ -13,11 +13,7 @@ Rules:
 - Planning or just started: 0-15. Built but not verified: 70-85. Verified and handed over: 95-100.
 - Stay close to the previous estimate unless the messages show real progress; new requirements from the person may lower it.
 - "left" names the concrete remaining work (e.g. "test and fix the checkout page"); when done, "done".
-- When the digest says Claude's turn has ended, "status" says why it stopped, judged from Claude's last message:
-  "question" when it asks the person something or waits for their decision, approval or input;
-  "done" when the work asked for is finished and nothing is asked of the person;
-  "blocked" when it stopped without finishing, on an error or something it cannot do.
-  While Claude is still working, leave "status" out.
+- When the digest says Claude's turn has ended, "status" is "blocked" when Claude stopped without finishing, on an error or something it cannot do, and "done" otherwise (a report, work still running in the background, or a question to the person). While Claude is still working, leave "status" out.
 - "now" names what Claude is doing at this moment (e.g. "running the checkout tests"); once the turn has ended, what it did last.
 - When the digest gives a SESSION NAME TO SHORTEN, "short" is that name in at most 3 words and 20 characters, keeping its meaning (e.g. "Fix the clipping on the share card" becomes "Share card clipping"). Otherwise leave "short" out.`
 
@@ -90,7 +86,7 @@ export const digest = (
 
 export type Estimate = { percent: number; left: string; now: string; status?: Status; short?: string }
 
-const STATUS_OF: Readonly<Record<string, Status>> = { question: 'question', done: 'done', blocked: 'error' }
+const STATUS_OF: Readonly<Record<string, Status>> = { done: 'done', blocked: 'error' }
 
 export const parseEstimate = (text: string): Estimate | null => {
   const json = /\{[\s\S]*\}/.exec(text)
@@ -116,9 +112,28 @@ export const parseEstimate = (text: string): Estimate | null => {
   }
 }
 
-// Where the model gave no status: a last message ending in a question mark (Latin or Arabic) asks something.
-export const guessStatus = (messages: readonly SessionMessage[]): Status => {
-  const last = [...messages].reverse().find(m => m.role === 'assistant' && clean(m.text) !== '')
+const WRAP_TOOL = 'mcp__ccd_turn__wrap_up'
 
-  return last !== undefined && /[?\u061F]$/u.test(clean(last.text)) ? 'question' : 'done'
+// The last turn's own messages: everything after the last thing the person, or a notification, sent.
+const lastTurn = (messages: readonly SessionMessage[]): SessionMessage[] => {
+  let start = messages.length
+  while (start > 0 && !isPrompt(messages[start - 1] as SessionMessage)) start -= 1
+
+  return messages.slice(start)
 }
+
+// Whether the turn ended on a question to the person: the app's wrap-up asked one, or Claude's last
+// words end in a question mark (Latin or Arabic). The model's reading alone is not enough.
+export const asksPerson = (messages: readonly SessionMessage[]): boolean => {
+  const turn = lastTurn(messages)
+  const isAsked = turn.some(m => m.toolUses.some(use => use.tool === WRAP_TOOL && String(use.input.ask ?? '').trim() !== ''))
+  if (isAsked) return true
+  const last = [...turn].reverse().find(m => m.role === 'assistant' && clean(m.text) !== '')
+
+  return last !== undefined && /[?\u061F]$/u.test(clean(last.text))
+}
+
+// Why a turn ended: a question only on proof of one, an error when the model says it stopped short,
+// else done.
+export const endedStatus = (messages: readonly SessionMessage[], modelStatus?: Status): Status =>
+  asksPerson(messages) ? 'question' : modelStatus === 'error' ? 'error' : 'done'

@@ -6,6 +6,7 @@ export const STALE_MS = 10 * 60_000
 export const REFRESH_SECONDS = 10
 export const HIDE_AFTER_MS = 15 * 60_000
 // A finished session that stopped checking in this long ago is off the list, seen or not; any session, after a day.
+export const CLOSED_SEEN_MS = 30 * 60_000
 export const CLOSED_DONE_MS = 6 * 3600_000
 export const CLOSED_MS = 24 * 3600_000
 
@@ -15,14 +16,16 @@ const ORDER: Readonly<Record<Status, number>> = { question: 0, working: 1, error
 export const sortProjects = (list: readonly Snapshot[]): Snapshot[] =>
   [...list].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || b.updatedAt - a.updatedAt)
 
-// Off the list: a finished project you have seen since it ended and that has been quiet a while, or a
-// session that stopped checking in long ago. A question, a stop or an error stays: it still needs you.
+// Off the list: a session closed half an hour ago whose last state you have read; a finished project
+// you have seen and that has been quiet a while; a session that stopped checking in long ago. In an
+// open session a question, a stop or an error stays: it still needs you.
 export const isListed = (s: Snapshot, now: number, hideAfterMs = HIDE_AFTER_MS): boolean => {
   const sinceCheckIn = now - s.updatedAt
+  const isSeen = s.seenAt !== null && s.endedAt !== null && s.seenAt >= s.endedAt
   if (sinceCheckIn > CLOSED_MS) return false
+  if (isSeen && sinceCheckIn >= CLOSED_SEEN_MS) return false
   if (s.status !== 'done') return true
   if (sinceCheckIn > CLOSED_DONE_MS) return false
-  const isSeen = s.seenAt !== null && s.endedAt !== null && s.seenAt >= s.endedAt
 
   return !(isSeen && s.endedAt !== null && now - s.endedAt >= hideAfterMs)
 }

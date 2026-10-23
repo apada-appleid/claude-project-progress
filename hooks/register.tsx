@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 
 import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
-import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
+import { digest, endedStatus, fingerprint, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { runningShells } from './background'
 import { dashboardHtml, hiddenText, listed, parseSnapshot, STALE_MS } from './dashboard'
 import { BAR_CELLS, BAR_PX, cells, ctxColor, ctxUsed, fit, GREEN, progressParts, svgBar, usageParts } from './line'
@@ -270,7 +270,7 @@ export const register: Register = (on, options) => {
           }
         }
         if (mode === 'final' && ofTurn === turn && !isTurnOpen) {
-          verdict = estimate?.status ?? guessStatus(messages)
+          verdict = endedStatus(messages, estimate?.status)
           isAwaitingVerdict = false
         }
         const agents = (await $.agent.list()).filter(a => a.status === 'pending' || a.status === 'running' || a.status === 'waiting')

@@ -21,7 +21,7 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 
 - What the mod adds sits in brackets, so it never reads as part of the name.
 - The pie and percent show only while Claude is working, so the sidebar stays quiet. Background work (a shell or a subagent still running after the turn) counts as working.
-- When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once. `[❓]` shows only when Claude actually asked you something.
+- When a turn ends, the estimate that runs at that moment also reads whether Claude asked you something or finished; a stop by you or an error is known at once. `[❓]` shows only when Claude actually asked you something: its wrap-up put a question to you, or its last words end in a question mark.
 - A name longer than 22 characters is shown shortened: the same estimate gives a version of 3 words at most ("Fix the clipping on the share card" becomes "Share card clipping"). The full name stays in the line above the prompt, and `/progress title off` puts it back in the title. Rename a session and the mod takes the new name.
 - The title changes only when what it shows changes (the percent in 5% steps), not every minute.
 
@@ -38,7 +38,14 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 
 **The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows: what needs you first, then what is working.
 
-The pane and the window show only current work. A finished project leaves them once you have seen it (its session was on screen after the turn ended) and it has been quiet for 15 minutes; one that stopped checking in leaves after 6 hours, seen or not, and any session after a day. A question, a stop or an error stays until you deal with it. A line at the bottom says how many projects are hidden.
+The pane and the window show only current work:
+
+- A finished project leaves once you have seen it (its session was on screen after the turn ended) and it has been quiet for 15 minutes.
+- A session you closed leaves half an hour later if you had read its last state, whatever that state was.
+- A finished session that stopped checking in leaves after 6 hours, seen or not, and any session after a day.
+- In an open session, a question, a stop or an error stays until you deal with it.
+
+A line at the bottom says how many projects are hidden.
 
 **The projects window**: `/progress window` (or the **Window** button above the prompt, or **Open in a window** in the pane) opens every project in a window of its own, outside any session: a Chrome app window, or your default browser when Chrome is not there. It is a local page (`~/.claude/project-progress/dashboard.html`) that every running session rewrites as it checks in, and it reloads itself every 10 seconds.
 

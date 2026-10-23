@@ -2,7 +2,7 @@ import type { On, SessionMessage } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
-import { digest, fingerprint, guessStatus, parseEstimate } from '../hooks/estimate'
+import { asksPerson, digest, endedStatus, fingerprint, parseEstimate } from '../hooks/estimate'
 import { dashboardHtml, isListed, parseSnapshot } from '../hooks/dashboard'
 import { BLUE, ctxColor, fit, progressParts, RED, usageParts, YELLOW } from '../hooks/line'
 import { planItems, planSteps } from '../hooks/plan'
@@ -60,7 +60,7 @@ test('the task list is replayed the way the app keeps it', () => {
   expect(run({ items }, { done: [1, 3], start: 2 })).toEqual({ done: 2, total: 3 })
   expect(
     planSteps(planItems([reply('', [use('mcp__ccd_turn__update_plan', { items }), use('mcp__ccd_turn__wrap_up', {})])])),
-  ).toEqual({ done: 3, total: 3 })
+  ).toEqual({ done: 0, total: 3 })
 })
 
 test('the estimate is read from the model leniently and clamped', () => {
@@ -69,7 +69,7 @@ test('the estimate is read from the model leniently and clamped', () => {
   expect(parseEstimate('no idea')).toBe(null)
   expect(parseEstimate('{"percent": "lots"}')).toBe(null)
   expect(parseEstimate('{"percent": 90, "left": "x", "status": "blocked"}')?.status).toBe('error')
-  expect(parseEstimate('{"percent": 90, "left": "x", "status": "question"}')?.status).toBe('question')
+  expect(parseEstimate('{"percent": 90, "left": "x", "status": "question"}')?.status).toBe(undefined)
   expect(parseEstimate('{"percent": 90, "left": "x", "status": "maybe"}')?.status).toBe(undefined)
   expect(parseEstimate('{"percent": 50, "left": "x", "now": "running tests", "short": "Share card clipping"}')).toEqual({
     percent: 50,
@@ -79,9 +79,17 @@ test('the estimate is read from the model leniently and clamped', () => {
   })
 })
 
-test('without a verdict, a last message ending in a question mark is a question', () => {
-  expect(guessStatus([prompt('go'), reply('Which colour should the button be?')])).toBe('question')
-  expect(guessStatus([prompt('go'), reply('All done.'), reply('', [use('Bash', {})])])).toBe('done')
+test('a turn ends on a question only when it asked one', () => {
+  const asked = use('mcp__ccd_turn__wrap_up', { recap: 'x', ask: 'Which fix first?' })
+  const told = use('mcp__ccd_turn__wrap_up', { recap: 'x' })
+
+  expect(asksPerson([prompt('go'), reply('Which colour should the button be?')])).toBe(true)
+  expect(asksPerson([prompt('go'), reply('Two fixes are ready.', [asked])])).toBe(true)
+  expect(asksPerson([prompt('go'), reply('The render is still running.', [told])])).toBe(false)
+  // A question from an earlier turn does not count once a notification started a new one.
+  expect(asksPerson([prompt('go'), reply('Ready?'), prompt('<task-notification>done</task-notification>'), reply('Rendered.')])).toBe(false)
+  expect(endedStatus([prompt('go'), reply('Rendering in the background.')])).toBe('done')
+  expect(endedStatus([prompt('go'), reply('It failed.')], 'error')).toBe('error')
 })
 
 test('the digest carries the goal, the tasks and the previous estimate, without reminders', () => {
@@ -181,6 +189,9 @@ test('a finished project leaves the list once seen and quiet; one that needs you
   expect(isListed({ ...done, seenAt: now - 5 * min }, now, 30 * min)).toBe(true)
   expect(isListed({ ...done, updatedAt: now - 7 * 60 * min }, now)).toBe(false)
   expect(isListed(snap({ status: 'question', updatedAt: now, endedAt: 0, seenAt: now }), now)).toBe(true)
+  // Closed half an hour ago with its last state read: gone, whatever that state was.
+  expect(isListed(snap({ status: 'question', updatedAt: now - 31 * min, endedAt: now - 40 * min, seenAt: now - 35 * min }), now)).toBe(false)
+  expect(isListed(snap({ status: 'question', updatedAt: now - 31 * min, endedAt: now - 40 * min, seenAt: null }), now)).toBe(true)
   expect(isListed(snap({ status: 'working', updatedAt: now - 25 * 60 * min }), now)).toBe(false)
 
   const html = dashboardHtml([{ ...done, project: 'Old one', seenAt: now - 5 * min }, snap({ project: 'Live one', updatedAt: now })], now)
@@ -316,7 +327,7 @@ test('the model is asked once per change, and never while you are away', async (
   expect(state.titles.at(-1)).toBe('[ctx 25%] Site')
 
   // The turn ends on a question while you are away: one final estimate still reads why.
-  state.verdict = 'question'
+  state.messages = [...state.messages, reply('Which colour should the button be?')]
   await $.turn.complete({ answer: 'Which colour?', durationMs: 1, isAborted: false, reason: 'answer', turnId: 't1' })
   await clock.advance(1000)
   expect(state.asked).toBe(3)

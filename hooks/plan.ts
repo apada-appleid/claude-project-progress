@@ -5,23 +5,19 @@ import type { Steps } from '../types'
 export type PlanItem = { content: string; status: 'pending' | 'in_progress' | 'completed' }
 
 const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
-const WRAP_TOOL = 'mcp__ccd_turn__wrap_up'
 
 const mark = (items: PlanItem[], at: number, status: PlanItem['status']): void => {
   const item = items[at]
   if (item !== undefined) items[at] = { ...item, status }
 }
 
-// Replays the session's task-list calls in order, the way the app keeps the list.
+// Replays the session's task-list calls in order, the way the app keeps the list (a turn's wrap-up
+// leaves it as it is).
 export const planItems = (messages: readonly SessionMessage[]): PlanItem[] | null => {
   let items: PlanItem[] | null = null
 
   for (const message of messages) {
     for (const use of message.toolUses) {
-      if (use.tool === WRAP_TOOL && items !== null) {
-        items = items.map(item => ({ ...item, status: 'completed' }))
-        continue
-      }
       if (use.tool !== PLAN_TOOL) continue
 
       const input = use.input
