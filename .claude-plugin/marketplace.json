@@ -1,0 +1,6 @@
+{
+  "name": "apada",
+  "description": "Claude Code mods by Apada.",
+  "owner": { "name": "Apada", "url": "https://apadaa.ir" },
+  "plugins": [{ "name": "project-progress", "source": "./" }]
+}

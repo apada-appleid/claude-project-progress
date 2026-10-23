@@ -1,0 +1,51 @@
+{
+  "name": "project-progress",
+  "version": "0.1.0",
+  "description": "A progress bar per session: a cheap model estimates how far the project is, paused while you are away, when the bar shows the context left instead.",
+  "author": {
+    "name": "Apada",
+    "url": "https://apadaa.ir"
+  },
+  "homepage": "https://github.com/apada-appleid/claude-project-progress",
+  "repository": "https://github.com/apada-appleid/claude-project-progress",
+  "keywords": [
+    "progress",
+    "session",
+    "sidebar",
+    "context",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "idleMinutes": {
+      "type": "number",
+      "title": "Away after (minutes)",
+      "description": "Minutes without mouse or keyboard input before estimates pause and the bar shows the context left.",
+      "default": 3
+    },
+    "intervalSeconds": {
+      "type": "number",
+      "title": "Check every (seconds)",
+      "description": "How often the session is checked; the model is asked only when something changed.",
+      "default": 60
+    },
+    "model": {
+      "type": "string",
+      "title": "Estimator model",
+      "description": "The model that estimates progress: an alias or a full model id.",
+      "default": "haiku"
+    },
+    "renameTitles": {
+      "type": "boolean",
+      "title": "Bar in the session title",
+      "description": "Put a short emoji bar at the start of the session's title, so the sidebar shows it.",
+      "default": true
+    },
+    "dailyTokenCap": {
+      "type": "number",
+      "title": "Daily token cap per session",
+      "description": "Estimates stop for the day once the estimator has used this many tokens in one session.",
+      "default": 400000
+    }
+  }
+}
