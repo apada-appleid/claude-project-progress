@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Snapshot } from '../types'
-import { digest, fingerprint, hasWork, parseEstimate, SYSTEM } from './estimate'
+import type { Snapshot, Status } from '../types'
+import type { Estimate } from './estimate'
+import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { BAR_CELLS, BAR_PX, barColor, barPct, cells, fit, partsFor, svgBar } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
@@ -17,8 +18,11 @@ const PANE_TITLE = 'Project progress'
 const STALE_MS = 10 * 60_000
 const WEEK_MS = 7 * 24 * 3600_000
 
-// 'tick' estimates when something changed, 'force' always, 'quiet' never.
-type Mode = 'tick' | 'force' | 'quiet'
+// 'quiet' never estimates, 'tick' when something changed, 'force' always, and 'final', once a turn
+// ends, always (away or not) and reads from it why the turn stopped.
+type Mode = 'quiet' | 'tick' | 'force' | 'final'
+
+const RANK: Readonly<Record<Mode, number>> = { quiet: 0, tick: 1, force: 2, final: 3 }
 
 // What session.start builds over its own $, for the timer and the other hooks to call.
 type Session = {
@@ -39,7 +43,9 @@ export const register: Register = (on, options) => {
 
   let session: Session | null = null
   let sharedDir = ''
-  let isWaiting = false
+  let status: Status = 'idle'
+  // Counts the main loop's turns, so a turn's late verdict never lands on the next one.
+  let turn = 0
   let isTitleOn = options.renameTitles !== false
 
   on('session.start', async ($, e, next) => {
@@ -47,10 +53,13 @@ export const register: Register = (on, options) => {
     const home = await $.env.get('HOME')
     sharedDir = home === undefined ? '' : `${home}/.claude/project-progress`
 
+    status = (await read($, snapshot))?.status ?? 'idle'
+
     let lastFingerprint = ''
-    let lastPrefix: string | null = null
+    // undefined until the first sync, which so strips a prefix a previous run left behind.
+    let lastPrefix: string | null | undefined
     let isBusy = false
-    let isAgain = false
+    let again: Mode | null = null
 
     const currentTitle = async (): Promise<string> => {
       const info = await $.mcp.call('ccd_session_mgmt', 'get_session', { session_id: 'self' })
@@ -115,7 +124,7 @@ export const register: Register = (on, options) => {
 
     const refresh = async (mode: Mode): Promise<void> => {
       if (isBusy) {
-        isAgain = true
+        again = again === null || RANK[mode] > RANK[again] ? mode : again
         return
       }
       isBusy = true
@@ -127,6 +136,7 @@ export const register: Register = (on, options) => {
         const [usage, messages, idle] = await Promise.all([$.session.usage(), $.session.messages(), idleFor(now)])
         const prev = await read($, snapshot)
         const isAway = mode !== 'force' && idle.ms !== null && idle.ms >= awayMs
+        const ofTurn = turn
         const items = planItems(messages)
         const today = new Date(now).toISOString().slice(0, 10)
         let estimator = prev?.estimator.date === today ? prev.estimator : { date: today, tokens: 0 }
@@ -134,13 +144,14 @@ export const register: Register = (on, options) => {
         let left = prev?.left ?? ''
 
         const print = fingerprint(messages)
-        const isChanged = mode === 'force' || (mode === 'tick' && print !== lastFingerprint)
-        if (!isAway && isChanged && hasWork(messages) && estimator.tokens < tokenCap) {
+        const isChanged = mode === 'force' || mode === 'final' || (mode === 'tick' && print !== lastFingerprint)
+        let estimate: Estimate | null = null
+        if ((mode === 'final' || !isAway) && isChanged && hasWork(messages) && estimator.tokens < tokenCap) {
           lastFingerprint = print
           const answer = await $.model.complete({
             model,
             system: [{ text: SYSTEM, cache: true }],
-            prompt: digest(messages, items, { percent, left }),
+            prompt: digest(messages, items, { percent, left }, mode === 'final'),
             maxTokens: 150,
             timeoutMs: 30_000,
           })
@@ -154,8 +165,11 @@ export const register: Register = (on, options) => {
               (used.cache_read_input_tokens ?? 0) +
               (used.cache_creation_input_tokens ?? 0),
           }
-          const estimate = answer.isAnswered ? parseEstimate(answer.text) : null
+          estimate = answer.isAnswered ? parseEstimate(answer.text) : null
           if (estimate !== null) ({ percent, left } = estimate)
+        }
+        if (mode === 'final' && ofTurn === turn && status === 'working') {
+          status = estimate?.status ?? guessStatus(messages)
         }
 
         const rate = usage.rateLimits.find(limit => limit.kind === 'five_hour')
@@ -167,7 +181,7 @@ export const register: Register = (on, options) => {
           steps: planSteps(items),
           contextFreePct: usage.context.percent === undefined ? null : 100 - usage.context.percent,
           rate5hPct: rate === undefined ? null : Math.round(rate.percentUsed),
-          isWaiting,
+          status,
           isAway,
           idleSource: idle.source,
           startedAt: usage.startedAt,
@@ -186,10 +200,9 @@ export const register: Register = (on, options) => {
         }
       } finally {
         isBusy = false
-        if (isAgain) {
-          isAgain = false
-          void refresh('quiet')
-        }
+        const pending = again
+        again = null
+        if (pending !== null) void refresh(pending)
       }
     }
 
@@ -208,21 +221,42 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      isWaiting = false
+      turn += 1
+      status = 'working'
       $.clock.after(300, () => void session?.refresh('quiet'))
     }
 
     return next(e)
   })
 
+  // Stopped by you or by an error is known at once; whether Claude asked something or finished
+  // is read by the final estimate.
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
-    if (e.agentId === undefined && e.reason === 'answer') {
-      isWaiting = true
-      $.clock.after(300, () => void session?.refresh('tick'))
+    if (e.agentId === undefined) {
+      if (e.reason === 'answer') {
+        $.clock.after(300, () => void session?.refresh('final'))
+      } else {
+        status = e.reason === 'aborted' ? 'stopped' : 'error'
+        $.clock.after(300, () => void session?.refresh('quiet'))
+      }
     }
 
     return done
+  })
+
+  // A question or a plan waiting for your answer holds the turn open: show it as a question meanwhile.
+  on('tool.call', async ($, e, next) => {
+    const isAsking = e.agentId === undefined && (e.tool === 'AskUserQuestion' || e.tool === 'ExitPlanMode')
+    if (!isAsking) return next(e)
+
+    status = 'question'
+    $.clock.after(0, () => void session?.refresh('quiet'))
+    const ran = await next(e)
+    if (status === 'question') status = 'working'
+    $.clock.after(0, () => void session?.refresh('quiet'))
+
+    return ran
   })
 
   // Where the machine cannot report its idle time, a prompt in any session marks you present.
