@@ -39,6 +39,10 @@ export type Snapshot = {
   idleSource: 'machine' | 'prompt' | null
   startedAt: number
   updatedAt: number
+  /** When the last turn ended; null while one runs or before the first. */
+  endedAt: number | null
+  /** When the session was last on screen after a turn ended: you have seen how it ended. */
+  seenAt: number | null
   estimator: { date: string; tokens: number }
 }
 

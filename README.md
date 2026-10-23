@@ -38,6 +38,8 @@ Every minute a small, cheap model (Haiku by default) reads a short digest of the
 
 **The projects pane**: `/progress` (or the **Projects** button above the prompt) opens a pane that lists every session running the mod, each with the same two rows: what needs you first, then what is working.
 
+The pane and the window show only current work. A finished project leaves them once you have seen it (its session was on screen after the turn ended) and it has been quiet for 15 minutes; one that stopped checking in leaves after 6 hours, seen or not, and any session after a day. A question, a stop or an error stays until you deal with it. A line at the bottom says how many projects are hidden.
+
 **The projects window**: `/progress window` (or the **Window** button above the prompt, or **Open in a window** in the pane) opens every project in a window of its own, outside any session: a Chrome app window, or your default browser when Chrome is not there. It is a local page (`~/.claude/project-progress/dashboard.html`) that every running session rewrites as it checks in, and it reloads itself every 10 seconds.
 
 <img src="docs/window.png" width="540" alt="The projects window: every session with its progress and context bars, what needs you first">
@@ -90,6 +92,7 @@ Set them with `/plugin configure project-progress@apada`, or in `settings.json` 
 | `model` | `haiku` | The estimator model: an alias or a full model id |
 | `renameTitles` | `true` | Put the bar at the start of the session title |
 | `dailyTokenCap` | `400000` | Tokens the estimator may use per session per day |
+| `hideDoneAfterMinutes` | `15` | Minutes after a finished project was seen before the pane and window leave it out |
 
 ## Notes
 

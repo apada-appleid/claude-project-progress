@@ -46,6 +46,12 @@
       "title": "Daily token cap per session",
       "description": "Estimates stop for the day once the estimator has used this many tokens in one session.",
       "default": 400000
+    },
+    "hideDoneAfterMinutes": {
+      "type": "number",
+      "title": "Hide finished projects after (minutes)",
+      "description": "Minutes after a finished project was seen before the projects pane and window leave it out.",
+      "default": 15
     }
   }
 }

@@ -5,7 +5,7 @@ import type { Snapshot, Status, TitleRecord } from '../types'
 import type { Estimate } from './estimate'
 import { digest, fingerprint, guessStatus, hasWork, parseEstimate, SYSTEM } from './estimate'
 import { runningShells } from './background'
-import { dashboardHtml, parseSnapshot, sortProjects, STALE_MS } from './dashboard'
+import { dashboardHtml, hiddenText, listed, parseSnapshot, STALE_MS } from './dashboard'
 import { BAR_CELLS, BAR_PX, cells, ctxColor, ctxUsed, fit, GREEN, progressParts, svgBar, usageParts } from './line'
 import { planItems, planSteps } from './plan'
 import { parseIdleMs } from './presence'
@@ -46,6 +46,7 @@ export const register: Register = (on, options) => {
   const intervalMs = Math.max(15, Number(options.intervalSeconds ?? 60)) * 1000
   const model = String(options.model ?? 'haiku')
   const tokenCap = Number(options.dailyTokenCap ?? 400_000)
+  const hideAfterMs = Number(options.hideDoneAfterMinutes ?? 15) * 60_000
 
   let session: Session | null = null
   let sharedDir = ''
@@ -59,6 +60,9 @@ export const register: Register = (on, options) => {
   // How the last turn ended: stopped by you or an error (known at once), else the model's verdict.
   let ending: Status | null = null
   let verdict: Status | null = null
+  // When the last turn ended, and when you last had the session on screen after that.
+  let endedAt: number | null = null
+  let seenAt: number | null = null
 
   // Working while a turn runs or background work goes on; a question only when Claude asked one.
   const statusOf = (background: number): Status => {
@@ -76,9 +80,12 @@ export const register: Register = (on, options) => {
     const sessionId = fileName(await $.session.id())
     const home = await $.env.get('HOME')
     sharedDir = home === undefined ? '' : `${home}/.claude/project-progress`
-    const before = (await read($, snapshot))?.status
+    const kept = await read($, snapshot)
+    const before = kept?.status
     ending = before === 'stopped' ? before : null
     verdict = before === 'question' || before === 'done' || before === 'error' ? before : null
+    endedAt = kept?.endedAt ?? null
+    seenAt = kept?.seenAt ?? null
 
     let lastFingerprint = ''
     let isBusy = false
@@ -174,7 +181,7 @@ export const register: Register = (on, options) => {
 
     // The page the projects window shows: any session that refreshes rewrites it with all of them.
     const writeDashboard = async (now: number): Promise<void> => {
-      await $.fs.write(dashboardFile(), dashboardHtml(await loadAll(now), now)).catch(() => undefined)
+      await $.fs.write(dashboardFile(), dashboardHtml(await loadAll(now), now, hideAfterMs)).catch(() => undefined)
     }
 
     // A window of its own (a Chrome app window, else the default browser), not tied to any session.
@@ -292,6 +299,8 @@ export const register: Register = (on, options) => {
           idleSource: idle.source,
           startedAt: usage.startedAt,
           updatedAt: now,
+          endedAt,
+          seenAt,
           estimator,
         }
 
@@ -339,6 +348,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       turn += 1
+      endedAt = null
       isTurnOpen = true
       isAwaitingVerdict = false
       ending = null
@@ -355,6 +365,7 @@ export const register: Register = (on, options) => {
     const done = await next(e)
     if (e.agentId === undefined) {
       isTurnOpen = false
+      endedAt = await $.clock.now()
       if (e.reason === 'answer') {
         isAwaitingVerdict = true
         $.clock.after(300, () => void session?.refresh('final'))
@@ -430,6 +441,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, snapshot)
     if (e.props.hasSurvey || s === null) return next(e)
+    // On screen after the turn ended: you have seen how it ended.
+    if (endedAt !== null && !isTurnOpen) seenAt = await $.clock.now()
 
     const progress = fit(progressParts(s, await $.clock.now()), e.props.bodyColumns - 28)
     const usage = fit(usageParts(s), e.props.bodyColumns - 16)
@@ -492,6 +505,7 @@ export const register: Register = (on, options) => {
 
     // Every session writes its own file, so the pane sees the projects of all of them.
     let list: Snapshot[] = []
+    let hidden = 0
     if (sharedDir !== '') {
       const dir = `${sharedDir}/sessions`
       try {
@@ -499,11 +513,12 @@ export const register: Register = (on, options) => {
           f => f.kind === 'file' && f.name.endsWith('.json') && now - f.mtimeMs < WEEK_MS,
         )
         const loaded = await Promise.all(files.map(f => $.fs.read(`${dir}/${f.name}`).then(parseSnapshot).catch(() => null)))
-        list = sortProjects(loaded.filter((s): s is Snapshot => s !== null))
+        ;({ shown: list, hidden } = listed(loaded.filter((s): s is Snapshot => s !== null), now, hideAfterMs))
       } catch {
         list = []
       }
     }
+    const empty = list.length === 0 && hidden === 0 ? 'No projects yet.' : 'Nothing in progress right now.'
 
     const columns = e.props.bodyColumns - (e.surface === 'terminal' ? BAR_CELLS + 2 : 16)
     const isStale = (s: Snapshot) => now - s.updatedAt > STALE_MS
@@ -530,7 +545,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" gap={1}>
           <Button key="window" label="Open in a window" plain onPress={() => void session?.openWindow()} />
-          {list.length === 0 && <Text dimColor>No projects yet.</Text>}
+          {list.length === 0 && <Text dimColor>{empty}</Text>}
           {list.map(s => (
             <Box key={s.sessionId} flexDirection="column">
               <Text bold dimColor={isStale(s)} wrap="truncate-end">
@@ -540,6 +555,7 @@ export const register: Register = (on, options) => {
               {row(ctxUsed(s) ?? 0, ctxColor(s), fit(usageParts(s), columns))}
             </Box>
           ))}
+          {hidden > 0 && <Text dimColor>{hiddenText(hidden)}</Text>}
         </Box>
       )
     }
@@ -557,7 +573,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" gap={1}>
         <Button key="window" label="Open in a window" plain onPress={() => void session?.openWindow()} />
-        {list.length === 0 && <Text dimColor>No projects yet.</Text>}
+        {list.length === 0 && <Text dimColor>{empty}</Text>}
         {list.map(s => (
           <Box key={s.sessionId} flexDirection="column">
             <Text bold dimColor={isStale(s)} wrap="truncate-end">
@@ -567,6 +583,7 @@ export const register: Register = (on, options) => {
             {row(ctxUsed(s) ?? 0, ctxColor(s), `context ${ctxUsed(s) ?? 0}% full`, fit(usageParts(s), columns))}
           </Box>
         ))}
+        {hidden > 0 && <Text dimColor>{hiddenText(hidden)}</Text>}
       </Box>
     )
   })

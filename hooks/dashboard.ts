@@ -4,12 +4,41 @@ import { prefixFor } from './title'
 
 export const STALE_MS = 10 * 60_000
 export const REFRESH_SECONDS = 10
+export const HIDE_AFTER_MS = 15 * 60_000
+// A finished session that stopped checking in this long ago is off the list, seen or not; any session, after a day.
+export const CLOSED_DONE_MS = 6 * 3600_000
+export const CLOSED_MS = 24 * 3600_000
 
 // What needs you first, then what is working, then the rest; newest first within each.
 const ORDER: Readonly<Record<Status, number>> = { question: 0, working: 1, error: 2, stopped: 3, done: 4, idle: 5 }
 
 export const sortProjects = (list: readonly Snapshot[]): Snapshot[] =>
   [...list].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) || b.updatedAt - a.updatedAt)
+
+// Off the list: a finished project you have seen since it ended and that has been quiet a while, or a
+// session that stopped checking in long ago. A question, a stop or an error stays: it still needs you.
+export const isListed = (s: Snapshot, now: number, hideAfterMs = HIDE_AFTER_MS): boolean => {
+  const sinceCheckIn = now - s.updatedAt
+  if (sinceCheckIn > CLOSED_MS) return false
+  if (s.status !== 'done') return true
+  if (sinceCheckIn > CLOSED_DONE_MS) return false
+  const isSeen = s.seenAt !== null && s.endedAt !== null && s.seenAt >= s.endedAt
+
+  return !(isSeen && s.endedAt !== null && now - s.endedAt >= hideAfterMs)
+}
+
+export const listed = (
+  list: readonly Snapshot[],
+  now: number,
+  hideAfterMs = HIDE_AFTER_MS,
+): { shown: Snapshot[]; hidden: number } => {
+  const shown = sortProjects(list.filter(s => isListed(s, now, hideAfterMs)))
+
+  return { shown, hidden: list.length - shown.length }
+}
+
+export const hiddenText = (hidden: number): string =>
+  `${hidden} finished or closed project${hidden === 1 ? '' : 's'} hidden`
 
 // A session file as read back: a session still on an earlier version writes fewer fields.
 export const parseSnapshot = (text: string): Snapshot | null => {
@@ -21,6 +50,8 @@ export const parseSnapshot = (text: string): Snapshot | null => {
       background: 0,
       contextTokens: null,
       contextWindow: null,
+      endedAt: null,
+      seenAt: null,
       ...(JSON.parse(text) as object),
     } as Snapshot
   } catch {
@@ -46,7 +77,11 @@ const project = (s: Snapshot, now: number): string => {
 }
 
 // A page of its own, outside any session: every project, reloading itself every few seconds.
-export const dashboardHtml = (list: readonly Snapshot[], now: number): string => `<!doctype html>
+export const dashboardHtml = (list: readonly Snapshot[], now: number, hideAfterMs = HIDE_AFTER_MS): string => {
+  const { shown, hidden } = listed(list, now, hideAfterMs)
+  const empty = list.length === 0 ? 'No projects yet. Sessions running the mod show up here.' : 'Nothing in progress right now.'
+
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="${REFRESH_SECONDS}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -67,8 +102,11 @@ h2{font-size:13px;font-weight:600;margin:0 0 6px;white-space:nowrap;overflow:hid
 .bar{flex:0 0 96px;height:6px;border-radius:3px;background:var(--track);overflow:hidden}
 .bar i{display:block;height:100%;border-radius:3px}
 .empty{color:var(--dim);padding:24px 0}
+.hidden{color:var(--dim);border-top:1px solid var(--line);padding-top:10px;margin:0}
 </style></head><body>
 <header><h1>Project progress</h1><span>${new Date(now).toTimeString().slice(0, 8)}</span></header>
-${list.length === 0 ? '<p class="empty">No projects yet. Sessions running the mod show up here.</p>' : sortProjects(list).map(s => project(s, now)).join('\n')}
+${shown.length === 0 ? `<p class="empty">${empty}</p>` : shown.map(s => project(s, now)).join('\n')}
+${hidden > 0 ? `<p class="hidden">${hiddenText(hidden)}</p>` : ''}
 </body></html>
 `
+}

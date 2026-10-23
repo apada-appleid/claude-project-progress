@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import type { Snapshot } from '../types'
 import { digest, fingerprint, guessStatus, parseEstimate } from '../hooks/estimate'
-import { dashboardHtml, parseSnapshot } from '../hooks/dashboard'
+import { dashboardHtml, isListed, parseSnapshot } from '../hooks/dashboard'
 import { BLUE, ctxColor, fit, progressParts, RED, usageParts, YELLOW } from '../hooks/line'
 import { planItems, planSteps } from '../hooks/plan'
 import { parseIdleMs } from '../hooks/presence'
@@ -38,6 +38,8 @@ const snap = (over: Partial<Snapshot>): Snapshot => ({
   idleSource: 'machine',
   startedAt: 0,
   updatedAt: 0,
+  endedAt: null,
+  seenAt: null,
   estimator: { date: '2026-10-23', tokens: 12_000 },
   ...over,
 })
@@ -165,6 +167,26 @@ test('the projects page lists every project, what needs you first, with names es
   expect(html.includes('width:62%;background:#22c55e')).toBe(true)
   expect(html.includes('width:59%;background:#3b82f6')).toBe(true)
   expect(dashboardHtml([], 0).includes('No projects yet')).toBe(true)
+})
+
+test('a finished project leaves the list once seen and quiet; one that needs you stays', () => {
+  const min = 60_000
+  const now = 10 * 60 * min
+  const done = snap({ status: 'done', updatedAt: now, endedAt: now - 20 * min })
+
+  expect(isListed(done, now)).toBe(true)
+  expect(isListed({ ...done, seenAt: now - 30 * min }, now)).toBe(true)
+  expect(isListed({ ...done, seenAt: now - 5 * min }, now)).toBe(false)
+  expect(isListed({ ...done, seenAt: now - 5 * min, endedAt: now - 5 * min }, now)).toBe(true)
+  expect(isListed({ ...done, seenAt: now - 5 * min }, now, 30 * min)).toBe(true)
+  expect(isListed({ ...done, updatedAt: now - 7 * 60 * min }, now)).toBe(false)
+  expect(isListed(snap({ status: 'question', updatedAt: now, endedAt: 0, seenAt: now }), now)).toBe(true)
+  expect(isListed(snap({ status: 'working', updatedAt: now - 25 * 60 * min }), now)).toBe(false)
+
+  const html = dashboardHtml([{ ...done, project: 'Old one', seenAt: now - 5 * min }, snap({ project: 'Live one', updatedAt: now })], now)
+  expect(html.includes('Old one')).toBe(false)
+  expect(html.includes('Live one')).toBe(true)
+  expect(html.includes('1 finished or closed project hidden')).toBe(true)
 })
 
 test('a session file from an earlier version still reads', () => {
@@ -347,6 +369,31 @@ test('background work keeps a finished turn working until its task ends', async 
   await clock.advance(60_000)
   expect(state.snapshot?.background).toBe(0)
   expect(state.titles.at(-1)).toBe(`[${STATUS_EMOJI.done}] Site`)
+})
+
+test('the session counts as seen once it is on screen after the turn ended', async ($, on) => {
+  const { clock, state } = world(on)
+  const band = {
+    plugin: 'project-progress',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    requestId: 'band',
+    props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll: { offset: 0, bodyRows: 10 }, view: {} },
+  } as const
+
+  await $.session.start({ cwd: '/work/site', surface: 'desktop', isInteractive: false })
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await clock.advance(2000)
+  await (await $.ui.mount(band)).unmount()
+  await clock.advance(60_000)
+  expect(state.snapshot?.seenAt).toBe(null)
+
+  await $.turn.complete({ answer: 'Done.', durationMs: 1, isAborted: false, reason: 'answer', turnId: 't1' })
+  await clock.advance(1000)
+  expect(state.snapshot?.endedAt).not.toBe(null)
+  await (await $.ui.mount(band)).unmount()
+  await clock.advance(60_000)
+  expect((state.snapshot?.seenAt ?? 0) >= (state.snapshot?.endedAt ?? Infinity)).toBe(true)
 })
 
 test('the band draws the bar and the line on the terminal and the desktop', async ($, on) => {
